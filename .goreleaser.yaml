@@ -62,7 +62,7 @@ changelog:
 release:
   github:
     owner: majiayu000
-    name: caude-skill-manager
+    name: claude-skill-manager
   draft: false
   prerelease: auto
   mode: replace
@@ -76,14 +76,14 @@ release:
 
     ```bash
     # Using Go
-    go install github.com/majiayu000/caude-skill-manager@{{ .Tag }}
+    go install github.com/majiayu000/claude-skill-manager@{{ .Tag }}
 
     # Or download binary
-    curl -L https://github.com/majiayu000/caude-skill-manager/releases/download/{{ .Tag }}/sk_darwin_arm64.tar.gz | tar xz
+    curl -L https://github.com/majiayu000/claude-skill-manager/releases/download/{{ .Tag }}/sk_darwin_arm64.tar.gz | tar xz
     sudo mv sk /usr/local/bin/
     ```
 
-    **Full Changelog**: https://github.com/majiayu000/caude-skill-manager/compare/{{ .PreviousTag }}...{{ .Tag }}
+    **Full Changelog**: https://github.com/majiayu000/claude-skill-manager/compare/{{ .PreviousTag }}...{{ .Tag }}
 
 homebrew_casks:
   - name: sk
@@ -92,7 +92,7 @@ homebrew_casks:
       name: homebrew-tap
     binaries:
       - sk
-    homepage: "https://github.com/majiayu000/caude-skill-manager"
+    homepage: "https://github.com/majiayu000/claude-skill-manager"
     description: "Claude Skills Manager - npm for Claude Code Skills"
     license: "MIT"
     skip_upload: true

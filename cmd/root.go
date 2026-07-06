@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/majiayu000/claude-skill-manager/pkg/styles"
 	"github.com/spf13/cobra"
-	"github.com/majiayu000/caude-skill-manager/pkg/styles"
 )
 
 var rootCmd = &cobra.Command{

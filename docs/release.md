@@ -48,7 +48,7 @@ bash scripts/smoke-registry.sh
 
 - The asset-backed GitHub release must exist.
 - Release assets must include the archive names used by the README.
-- `go install github.com/majiayu000/caude-skill-manager@latest` must resolve to
+- `go install github.com/majiayu000/claude-skill-manager@latest` must resolve to
   the new tag after it is visible to the Go proxy.
 - The GoReleaser Homebrew upload path depends on `HOMEBREW_TAP_GITHUB_TOKEN`;
   if that token is unavailable, Homebrew publication should be documented as

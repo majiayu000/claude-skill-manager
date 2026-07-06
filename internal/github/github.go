@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/majiayu000/caude-skill-manager/internal/config"
+	"github.com/majiayu000/claude-skill-manager/internal/config"
 )
 
 // RepoInfo contains parsed GitHub repository information

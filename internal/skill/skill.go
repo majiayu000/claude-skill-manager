@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/majiayu000/caude-skill-manager/internal/config"
+	"github.com/majiayu000/claude-skill-manager/internal/config"
 )
 
 // Skill represents an installed skill

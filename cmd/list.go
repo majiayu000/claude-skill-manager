@@ -3,10 +3,10 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/majiayu000/claude-skill-manager/internal/skill"
+	"github.com/majiayu000/claude-skill-manager/internal/ui"
+	"github.com/majiayu000/claude-skill-manager/pkg/styles"
 	"github.com/spf13/cobra"
-	"github.com/majiayu000/caude-skill-manager/internal/skill"
-	"github.com/majiayu000/caude-skill-manager/internal/ui"
-	"github.com/majiayu000/caude-skill-manager/pkg/styles"
 )
 
 var listCmd = &cobra.Command{

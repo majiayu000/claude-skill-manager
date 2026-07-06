@@ -1,7 +1,7 @@
 # sk - Claude Skills Manager
 
 <p align="center">
-  <a href="https://github.com/majiayu000/caude-skill-manager/releases"><img src="https://img.shields.io/github/v/release/majiayu000/caude-skill-manager?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/majiayu000/claude-skill-manager/releases"><img src="https://img.shields.io/github/v/release/majiayu000/claude-skill-manager?style=flat-square" alt="Release"></a>
   <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go" alt="Go">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome">
@@ -31,7 +31,7 @@
 
 ```bash
 # Using Go
-go install github.com/majiayu000/caude-skill-manager@latest
+go install github.com/majiayu000/claude-skill-manager@latest
 
 # Or download a binary archive from the latest GitHub release.
 ```
@@ -45,15 +45,15 @@ The expected archive names are:
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/majiayu000/caude-skill-manager/releases/latest/download/sk_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/majiayu000/claude-skill-manager/releases/latest/download/sk_darwin_arm64.tar.gz | tar xz
 sudo mv sk /usr/local/bin/
 
 # macOS (Intel)
-curl -L https://github.com/majiayu000/caude-skill-manager/releases/latest/download/sk_darwin_amd64.tar.gz | tar xz
+curl -L https://github.com/majiayu000/claude-skill-manager/releases/latest/download/sk_darwin_amd64.tar.gz | tar xz
 sudo mv sk /usr/local/bin/
 
 # Linux (amd64)
-curl -L https://github.com/majiayu000/caude-skill-manager/releases/latest/download/sk_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/majiayu000/claude-skill-manager/releases/latest/download/sk_linux_amd64.tar.gz | tar xz
 sudo mv sk /usr/local/bin/
 ```
 

@@ -8,6 +8,13 @@ Release notes are grouped by GitHub tag.
 
 - No unreleased changes.
 
+## v0.3.1 - 2026-07-06
+
+### Changed
+
+- Migrated the Go module path and documentation from `caude-skill-manager` to
+  `claude-skill-manager` after the repository rename.
+
 ## v0.3.0 - 2026-06-24
 
 ### Added

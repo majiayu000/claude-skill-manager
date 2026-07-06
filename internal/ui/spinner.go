@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/majiayu000/caude-skill-manager/pkg/styles"
+	"github.com/majiayu000/claude-skill-manager/pkg/styles"
 	"golang.org/x/term"
 )
 

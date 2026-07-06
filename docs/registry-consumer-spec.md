@@ -130,7 +130,7 @@ Acceptance:
 - CI passes on the release commit.
 - `v0.3.0` is tagged from the commit that includes manifest/shard support.
 - GitHub release assets include the archive names documented in README.
-- `go install github.com/majiayu000/caude-skill-manager@latest` resolves to the
+- `go install github.com/majiayu000/claude-skill-manager@latest` resolves to the
   new version after the tag is visible to the Go proxy.
 - One downloaded archive runs `sk --help`, `sk doctor`, and a cold-cache
   `sk search testing`.
@@ -244,7 +244,7 @@ HOME=/tmp/sk-home-verify /path/to/sk search --category testing
 Release:
 
 ```bash
-gh run list --repo majiayu000/caude-skill-manager --limit 5
-gh release view v0.3.0 --repo majiayu000/caude-skill-manager
-go list -m -versions github.com/majiayu000/caude-skill-manager@latest
+gh run list --repo majiayu000/claude-skill-manager --limit 5
+gh release view v0.3.0 --repo majiayu000/claude-skill-manager
+go list -m -versions github.com/majiayu000/claude-skill-manager@latest
 ```

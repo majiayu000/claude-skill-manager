@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majiayu000/caude-skill-manager/internal/registry"
+	"github.com/majiayu000/claude-skill-manager/internal/registry"
 )
 
 func TestInspectCacheFileReportsMissing(t *testing.T) {

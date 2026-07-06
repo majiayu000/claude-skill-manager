@@ -1,12 +1,12 @@
-# Contributing to caude-skill-manager
+# Contributing to claude-skill-manager
 
 Thanks for your interest in contributing!
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/majiayu000/caude-skill-manager.git
-cd caude-skill-manager
+git clone https://github.com/majiayu000/claude-skill-manager.git
+cd claude-skill-manager
 go build ./...
 go test ./...
 ```

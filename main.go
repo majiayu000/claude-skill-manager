@@ -1,6 +1,6 @@
 package main
 
-import "github.com/majiayu000/caude-skill-manager/cmd"
+import "github.com/majiayu000/claude-skill-manager/cmd"
 
 func main() {
 	cmd.Execute()

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/majiayu000/caude-skill-manager/internal/config"
-	"github.com/majiayu000/caude-skill-manager/internal/registry"
-	"github.com/majiayu000/caude-skill-manager/internal/skill"
-	"github.com/majiayu000/caude-skill-manager/pkg/styles"
+	"github.com/majiayu000/claude-skill-manager/internal/config"
+	"github.com/majiayu000/claude-skill-manager/internal/registry"
+	"github.com/majiayu000/claude-skill-manager/internal/skill"
+	"github.com/majiayu000/claude-skill-manager/pkg/styles"
 	"github.com/spf13/cobra"
 )
 

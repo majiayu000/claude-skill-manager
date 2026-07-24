@@ -43,7 +43,7 @@ func downloadToTempFile(url string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", &httpStatusError{status: resp.Status}
@@ -55,12 +55,12 @@ func downloadToTempFile(url string) (string, error) {
 	}
 
 	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("failed to save zip: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("failed to save zip: %w", err)
 	}
 
@@ -204,7 +204,7 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(zipPath)
+	defer func() { _ = os.Remove(zipPath) }()
 
 	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
 
@@ -272,7 +272,7 @@ func downloadAndExtractWithBranch(info *RepoInfo, targetName string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(zipPath)
+	defer func() { _ = os.Remove(zipPath) }()
 
 	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
 	return extractZip(zipPath, targetDir, info)

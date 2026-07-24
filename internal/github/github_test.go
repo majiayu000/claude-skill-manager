@@ -94,7 +94,7 @@ func TestDownloadToTempFileReportsStatusError(t *testing.T) {
 
 func TestDownloadToTempFileWritesBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("zip-bytes"))
+		_, _ = w.Write([]byte("zip-bytes"))
 	}))
 	defer srv.Close()
 

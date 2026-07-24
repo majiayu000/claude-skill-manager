@@ -91,15 +91,6 @@ func Load() *Config {
 	return cfg
 }
 
-// Save saves configuration to file
-func (c *Config) Save() error {
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(ConfigPath(), data, 0644)
-}
-
 // EnsureSkillsDir creates the skills directory if it doesn't exist
 func EnsureSkillsDir() error {
 	dir := GetSkillsDir()

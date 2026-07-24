@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 )
 
+// DefaultRegistryURL is the base URL for the skill registry. It is the single
+// source of truth for the default; the registry package reads it from here.
+const DefaultRegistryURL = "https://raw.githubusercontent.com/majiayu000/claude-skill-registry/main"
+
 // Config represents the global configuration
 type Config struct {
 	SkillsDir        string `json:"skills_dir"`
@@ -44,7 +48,7 @@ func GetRegistryTTL() int {
 func GetRegistryBaseURL() string {
 	cfg := Load()
 	if cfg.Registry == "" || cfg.Registry == "github" {
-		return "https://raw.githubusercontent.com/majiayu000/claude-skill-registry/main"
+		return DefaultRegistryURL
 	}
 	return cfg.Registry
 }

@@ -257,10 +257,6 @@ func searchRegistry(keyword string) {
 			)
 		}
 
-		if skill.Featured {
-			fmt.Printf(" %s", styles.BadgeStyle.Render("featured"))
-		}
-
 		fmt.Println()
 
 		if desc != "" {

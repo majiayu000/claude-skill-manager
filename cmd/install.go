@@ -61,15 +61,18 @@ Supported formats:
 			skillName = github.GetSkillName(info)
 		}
 
-		// Check if already installed
-		if skill.Exists(skillName) && !installForce {
+		// Check if already installed. Exists() scans and parses every installed
+		// SKILL.md, so resolve it once and reuse the answer.
+		alreadyInstalled := skill.Exists(skillName)
+
+		if alreadyInstalled && !installForce {
 			fmt.Println(styles.RenderWarning(fmt.Sprintf("Skill '%s' is already installed.", skillName)))
 			fmt.Println(styles.MutedStyle.Render("Use --force to reinstall."))
 			os.Exit(1)
 		}
 
 		// Remove existing if force
-		if installForce && skill.Exists(skillName) {
+		if alreadyInstalled && installForce {
 			if err := skill.Remove(skillName); err != nil {
 				fmt.Println(styles.RenderError("Failed to remove existing skill: " + err.Error()))
 				os.Exit(1)

@@ -2,6 +2,7 @@ package github
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,9 +11,61 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/majiayu000/claude-skill-manager/internal/config"
 )
+
+// downloadClient is used for repository archive downloads. Archives can be
+// large, so it allows more time than the registry client, but it must stay
+// bounded so a stalled connection cannot hang the CLI forever.
+var downloadClient = &http.Client{Timeout: 120 * time.Second}
+
+// httpStatusError reports a non-200 response, so callers can distinguish a
+// missing branch (worth retrying as "master") from a transport failure.
+type httpStatusError struct {
+	status string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("download failed with status: %s", e.status)
+}
+
+func archiveURL(info *RepoInfo) string {
+	return fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.zip",
+		info.Owner, info.Repo, info.Branch)
+}
+
+// downloadToTempFile fetches url into a temp file and returns its path.
+// The caller owns the file and must remove it.
+func downloadToTempFile(url string) (string, error) {
+	resp, err := downloadClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to download: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", &httpStatusError{status: resp.Status}
+	}
+
+	tmpFile, err := os.CreateTemp("", "sk-*.zip")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("failed to save zip: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("failed to save zip: %w", err)
+	}
+
+	return tmpFile.Name(), nil
+}
 
 // RepoInfo contains parsed GitHub repository information
 type RepoInfo struct {
@@ -140,49 +193,23 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 	}
 
 	// Download as zip
-	zipURL := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.zip",
-		info.Owner, info.Repo, info.Branch)
+	zipPath, err := downloadToTempFile(archiveURL(info))
 
-	resp, err := http.Get(zipURL)
+	// Try 'master' branch if 'main' is missing
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) && info.Branch == "main" {
+		info.Branch = "master"
+		zipPath, err = downloadToTempFile(archiveURL(info))
+	}
 	if err != nil {
-		return fmt.Errorf("failed to download: %w", err)
+		return err
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		// Try 'master' branch if 'main' fails
-		if info.Branch == "main" {
-			info.Branch = "master"
-			zipURL = fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.zip",
-				info.Owner, info.Repo, info.Branch)
-			resp, err = http.Get(zipURL)
-			if err != nil {
-				return fmt.Errorf("failed to download: %w", err)
-			}
-		}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status: %s", resp.Status)
-	}
-
-	// Create temp file for zip
-	tmpFile, err := os.CreateTemp("", "sk-*.zip")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		return fmt.Errorf("failed to save zip: %w", err)
-	}
-	tmpFile.Close()
+	defer func() { _ = os.Remove(zipPath) }()
 
 	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
 
 	// Try the specified path first
-	err = extractZip(tmpFile.Name(), targetDir, info)
+	err = extractZip(zipPath, targetDir, info)
 	if err != nil && info.Path != "" {
 		// If path doesn't work, try common skill locations
 		// e.g., "docx" -> "skills/docx" for anthropics/skills repo
@@ -195,7 +222,7 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 			infoCopy := *info
 			infoCopy.Path = altPath
 			os.RemoveAll(targetDir) // Clean up failed attempt
-			if err = extractZip(tmpFile.Name(), targetDir, &infoCopy); err == nil {
+			if err = extractZip(zipPath, targetDir, &infoCopy); err == nil {
 				return nil
 			}
 		}
@@ -241,37 +268,14 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
 }
 
 func downloadAndExtractWithBranch(info *RepoInfo, targetName string) error {
-	zipURL := fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.zip",
-		info.Owner, info.Repo, info.Branch)
-
-	resp, err := http.Get(zipURL)
+	zipPath, err := downloadToTempFile(archiveURL(info))
 	if err != nil {
-		return fmt.Errorf("failed to download: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return fmt.Errorf("download failed with status: %s", resp.Status)
-	}
-	defer resp.Body.Close()
-
-	tmpFile, err := os.CreateTemp("", "sk-*.zip")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		return fmt.Errorf("failed to save zip: %w", err)
-	}
-	tmpFile.Close()
-
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
-	if err := extractZip(tmpFile.Name(), targetDir, info); err != nil {
 		return err
 	}
+	defer func() { _ = os.Remove(zipPath) }()
 
-	return nil
+	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
+	return extractZip(zipPath, targetDir, info)
 }
 
 // extractZip extracts the zip file to target directory

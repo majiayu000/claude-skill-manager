@@ -1,12 +1,14 @@
 package skill
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/majiayu000/claude-skill-manager/internal/config"
+	"go.yaml.in/yaml/v3"
 )
 
 // Skill represents an installed skill
@@ -123,28 +125,47 @@ func parseSkillMd(path string) (*SkillMeta, error) {
 	}
 
 	meta := &SkillMeta{}
-	text := string(content)
 
-	// Simple front matter parsing (between ---)
-	if strings.HasPrefix(text, "---") {
-		parts := strings.SplitN(text, "---", 3)
-		if len(parts) >= 3 {
-			frontMatter := parts[1]
-			lines := strings.Split(frontMatter, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "name:") {
-					meta.Name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-					meta.Name = strings.Trim(meta.Name, "\"'")
-				} else if strings.HasPrefix(line, "description:") {
-					meta.Description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-					meta.Description = strings.Trim(meta.Description, "\"'")
-				}
-			}
+	frontMatter, ok := extractFrontMatter(string(content))
+	if !ok {
+		return meta, nil
+	}
+
+	if err := yaml.Unmarshal([]byte(frontMatter), meta); err != nil {
+		return nil, fmt.Errorf("invalid front matter in %s: %w", path, err)
+	}
+
+	meta.Name = strings.TrimSpace(meta.Name)
+	meta.Description = strings.TrimSpace(meta.Description)
+
+	return meta, nil
+}
+
+// extractFrontMatter returns the YAML block between the leading '---' line and
+// the next '---' or '...' line. Unlike splitting the whole file on '---', a
+// delimiter appearing inside a value does not truncate the block, because only
+// an unindented delimiter on its own line closes it — the same rule YAML uses
+// for document boundaries.
+func extractFrontMatter(text string) (string, bool) {
+	text = strings.TrimPrefix(text, "\ufeff")
+
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || trimDelimiter(lines[0]) != "---" {
+		return "", false
+	}
+
+	for i := 1; i < len(lines); i++ {
+		switch trimDelimiter(lines[i]) {
+		case "---", "...":
+			return strings.Join(lines[1:i], "\n"), true
 		}
 	}
 
-	return meta, nil
+	return "", false
+}
+
+func trimDelimiter(line string) string {
+	return strings.TrimRight(line, " \t\r")
 }
 
 // GetSkillDir returns the full path for a skill

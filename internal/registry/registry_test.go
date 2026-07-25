@@ -460,3 +460,20 @@ func writeConfigForRegistryTest(t *testing.T, registryURL string) {
 		t.Fatal(err)
 	}
 }
+
+// The compact search index carries no featured flag, so every skill produced
+// from it has Featured == false. `sk search` relies on this: it deliberately
+// renders no featured badge. If the index ever gains the field, revisit
+// searchRegistry in cmd/search.go.
+func TestEntryToSkillNeverMarksFeatured(t *testing.T) {
+	skill := entryToSkill(SearchIndexEntry{
+		Name:        "frontend-testing",
+		Description: "Testing skill",
+		Install:     "owner/repo/.agents/skills/frontend-testing/SKILL.md",
+		Branch:      "main",
+		Stars:       42,
+	})
+	if skill.Featured {
+		t.Fatal("search index entries cannot be featured")
+	}
+}

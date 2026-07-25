@@ -14,11 +14,6 @@ import (
 	"github.com/majiayu000/claude-skill-manager/internal/config"
 )
 
-const (
-	// DefaultRegistryURL is the base URL for the skill registry
-	DefaultRegistryURL = "https://raw.githubusercontent.com/majiayu000/claude-skill-registry/main"
-)
-
 // Registry represents the skill registry
 type Registry struct {
 	Version               string  `json:"version"`
@@ -157,7 +152,7 @@ var httpClient = &http.Client{
 func registryBaseURL() string {
 	base := config.GetRegistryBaseURL()
 	if base == "" || base == "github" {
-		return DefaultRegistryURL
+		return config.DefaultRegistryURL
 	}
 	return strings.TrimRight(base, "/")
 }

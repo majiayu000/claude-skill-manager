@@ -39,3 +39,20 @@ func TestGetRegistryBaseURLHonoursOverride(t *testing.T) {
 		t.Fatalf("got %q, want the configured override", got)
 	}
 }
+
+func TestLoadReadsFileOnlyOnce(t *testing.T) {
+	writeConfig(t, `{"registry": "https://example.test/registry"}`)
+
+	first := Load()
+	if err := os.Remove(ConfigPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The file is gone; an uncached Load would fall back to the defaults.
+	if second := Load(); second != first {
+		t.Fatalf("expected the cached config, got a fresh read: %+v", second)
+	}
+	if got := GetRegistryBaseURL(); got != "https://example.test/registry" {
+		t.Fatalf("accessor re-read disk: got %q", got)
+	}
+}

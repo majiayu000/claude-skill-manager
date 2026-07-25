@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // DefaultRegistryURL is the base URL for the skill registry. It is the single
@@ -79,11 +80,37 @@ func SearchIndexCachePath() string {
 	return filepath.Join(cacheDir, "sk", "search-index.json")
 }
 
-// Load loads configuration from file
+var (
+	loadMu     sync.Mutex
+	loadedPath string
+	loadedConf *Config
+)
+
+// Load returns the configuration, reading ~/.skrc at most once per process.
+// GetSkillsDir, GetRegistryTTL and GetRegistryBaseURL all call Load, and sk is
+// a single-shot CLI, so re-reading the file on every lookup is pure waste.
+//
+// The cache is keyed on the config path so that a changed HOME (as in tests)
+// invalidates it rather than silently serving another home's config.
 func Load() *Config {
+	path := ConfigPath()
+
+	loadMu.Lock()
+	defer loadMu.Unlock()
+
+	if loadedConf != nil && loadedPath == path {
+		return loadedConf
+	}
+
+	loadedConf = load(path)
+	loadedPath = path
+	return loadedConf
+}
+
+func load(path string) *Config {
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(ConfigPath())
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return cfg
 	}

@@ -503,7 +503,7 @@ func extractZip(zipPath, targetDir string, info *RepoInfo) error {
 	skillMdPath := filepath.Join(targetDir, "SKILL.md")
 	if _, err := os.Stat(skillMdPath); os.IsNotExist(err) {
 		// Clean up
-		os.RemoveAll(targetDir)
+		_ = os.RemoveAll(targetDir)
 		if extractedFiles == 0 {
 			return fmt.Errorf("no files found at path '%s' - check if the path is correct", info.Path)
 		}

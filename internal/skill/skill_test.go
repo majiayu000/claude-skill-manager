@@ -129,7 +129,7 @@ func TestExtractFrontMatterStripsBOM(t *testing.T) {
 }
 
 func TestValidateSkillNameRejectsPathEscape(t *testing.T) {
-	valid := []string{"docx", "my-skill", "skill_1", "frontend.testing"}
+	valid := []string{"docx", "my-skill", "skill_1", "frontend.testing", "foo..bar"}
 	for _, name := range valid {
 		if err := ValidateSkillName(name); err != nil {
 			t.Fatalf("ValidateSkillName(%q): unexpected error: %v", name, err)

@@ -61,14 +61,26 @@ Supported formats:
 			skillName = github.GetSkillName(info)
 		}
 
-		// Check if already installed. Exists() scans and parses every installed
-		// SKILL.md, so resolve it once and reuse the answer.
-		alreadyInstalled := skill.Exists(skillName)
+		// Resolve once: Exists/Get scan and parse every installed SKILL.md.
+		// Prefer the matched directory path so --force replaces an aliased
+		// install (dir basename != front-matter name) instead of creating a duplicate.
+		existing, existingErr := skill.Get(skillName)
+		if existingErr != nil {
+			fmt.Println(styles.RenderError("Failed to check installed skills: " + existingErr.Error()))
+			os.Exit(1)
+		}
+		alreadyInstalled := existing != nil
 
 		if alreadyInstalled && !installForce {
 			fmt.Println(styles.RenderWarning(fmt.Sprintf("Skill '%s' is already installed.", skillName)))
 			fmt.Println(styles.MutedStyle.Render("Use --force to reinstall."))
 			os.Exit(1)
+		}
+
+		opts := github.ExtractOptions{}
+		if alreadyInstalled && installForce {
+			opts.FinalDir = existing.Path
+			opts.AllowReplace = true
 		}
 
 		// Do not remove the existing skill before download/extract. DownloadAndExtract
@@ -80,11 +92,14 @@ Supported formats:
 		fmt.Printf("  %s %s\n", styles.MutedStyle.Render("from"), info.FullURL)
 		fmt.Println()
 
+		installPath := ""
 		// Download and install with spinner
 		err = ui.RunWithSpinner("Downloading...", func() (string, error) {
-			if err := github.DownloadAndExtract(info, skillName); err != nil {
+			path, err := github.DownloadAndExtract(info, skillName, opts)
+			if err != nil {
 				return "", err
 			}
+			installPath = path
 
 			// Get installed skill info
 			s, _ := skill.Get(skillName)
@@ -100,8 +115,11 @@ Supported formats:
 			os.Exit(1)
 		}
 
+		if installPath == "" {
+			installPath = skill.GetSkillDir(skillName)
+		}
 		fmt.Println()
-		fmt.Println(styles.MutedStyle.Render("  Skill installed to: ") + skill.GetSkillDir(skillName))
+		fmt.Println(styles.MutedStyle.Render("  Skill installed to: ") + installPath)
 		fmt.Println()
 	},
 }

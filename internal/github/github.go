@@ -185,13 +185,23 @@ func normalizeSkillPath(info *RepoInfo) {
 	}
 }
 
-// DownloadAndExtract downloads a repository and extracts to skills directory.
+// ExtractOptions controls where a downloaded skill is installed and whether an
+// existing path may be replaced. FinalDir, when set, must already be an
+// identified skill directory being force-reinstalled (for example an aliased
+// install whose directory basename differs from the front-matter name).
+type ExtractOptions struct {
+	FinalDir     string
+	AllowReplace bool
+}
+
+// DownloadAndExtract downloads a repository and extracts to the skills directory.
 // Extraction always goes into a staging directory under the skills root; the
 // existing skill (if any) is replaced only after the new tree validates.
 // On any failure before that swap, the previous install is left intact.
-func DownloadAndExtract(info *RepoInfo, targetName string) error {
+// It returns the final install directory on success.
+func DownloadAndExtract(info *RepoInfo, targetName string, opts ExtractOptions) (string, error) {
 	if err := config.EnsureSkillsDir(); err != nil {
-		return fmt.Errorf("failed to create skills directory: %w", err)
+		return "", fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
 	// Download as zip
@@ -204,34 +214,37 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 		zipPath, err = downloadToTempFile(archiveURL(info))
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	err = installZipAtomically(zipPath, info, targetName)
+	finalDir, err := installZipAtomically(zipPath, info, targetName, opts)
 	if err != nil && info.TreeRef != "" && info.TreeRefAmbiguous {
-		if resolveErr := tryResolveAmbiguousTreeRef(info, targetName); resolveErr == nil {
-			return nil
+		if resolved, resolveErr := tryResolveAmbiguousTreeRef(info, targetName, opts); resolveErr == nil {
+			return resolved, nil
 		}
-		return fmt.Errorf("%w (if your branch contains '/', URL-encode it, e.g. feature%%2Ffoo)", err)
+		return "", fmt.Errorf("%w (if your branch contains '/', URL-encode it, e.g. feature%%2Ffoo)", err)
 	}
-	return err
+	return finalDir, err
 }
 
 // installZipAtomically extracts a downloaded zip into a staging directory under
-// the skills root, validates it, then swaps it into targetName. On any failure
-// before the swap, an existing skill at targetName is left untouched.
-func installZipAtomically(zipPath string, info *RepoInfo, targetName string) error {
+// the skills root, validates it, then swaps it into the final install path.
+// On any failure before the swap, an existing skill at that path is left untouched.
+func installZipAtomically(zipPath string, info *RepoInfo, targetName string, opts ExtractOptions) (string, error) {
 	if err := config.EnsureSkillsDir(); err != nil {
-		return fmt.Errorf("failed to create skills directory: %w", err)
+		return "", fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
 	skillsDir := config.GetSkillsDir()
-	finalDir := filepath.Join(skillsDir, targetName)
-
-	stagingDir, err := os.MkdirTemp(skillsDir, "."+targetName+".staging-")
+	finalDir, err := resolveFinalSkillDir(skillsDir, targetName, opts.FinalDir)
 	if err != nil {
-		return fmt.Errorf("failed to create staging directory: %w", err)
+		return "", err
+	}
+
+	stagingDir, err := os.MkdirTemp(skillsDir, "."+filepath.Base(finalDir)+".staging-")
+	if err != nil {
+		return "", fmt.Errorf("failed to create staging directory: %w", err)
 	}
 	swapped := false
 	defer func() {
@@ -241,13 +254,65 @@ func installZipAtomically(zipPath string, info *RepoInfo, targetName string) err
 	}()
 
 	if err := extractZipWithFallbacks(zipPath, stagingDir, info); err != nil {
-		return fmt.Errorf("failed to extract: %w", err)
+		return "", fmt.Errorf("failed to extract: %w", err)
 	}
-	if err := replaceSkillDir(finalDir, stagingDir); err != nil {
-		return err
+	if err := replaceSkillDir(finalDir, stagingDir, opts.AllowReplace); err != nil {
+		return "", err
 	}
 	swapped = true
+	return finalDir, nil
+}
+
+// resolveFinalSkillDir validates targetName (or an explicit FinalDir override)
+// so the install path is always a single safe component strictly under skillsDir.
+func resolveFinalSkillDir(skillsDir, targetName, overrideFinalDir string) (string, error) {
+	skillsDir = filepath.Clean(skillsDir)
+
+	var finalDir string
+	if overrideFinalDir != "" {
+		finalDir = filepath.Clean(overrideFinalDir)
+	} else {
+		if err := validateSkillName(targetName); err != nil {
+			return "", err
+		}
+		finalDir = filepath.Join(skillsDir, targetName)
+	}
+
+	if !isStrictlyWithinDir(skillsDir, finalDir) {
+		return "", fmt.Errorf("refusing to install outside skills directory: %s", finalDir)
+	}
+	if err := validateSkillName(filepath.Base(finalDir)); err != nil {
+		return "", err
+	}
+	return finalDir, nil
+}
+
+func validateSkillName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	if strings.ContainsAny(name, `/\`) || filepath.IsAbs(name) {
+		return fmt.Errorf("invalid skill name %q: must be a single path component", name)
+	}
+	if filepath.Base(name) != name || filepath.Clean(name) != name {
+		return fmt.Errorf("invalid skill name %q: must be a single path component", name)
+	}
 	return nil
+}
+
+// isStrictlyWithinDir reports whether target is a path strictly contained under
+// root (root itself is rejected).
+func isStrictlyWithinDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if root == target {
+		return false
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // extractZipWithFallbacks extracts into stagingDir, trying common alternate
@@ -277,21 +342,54 @@ func extractZipWithFallbacks(zipPath, stagingDir string, info *RepoInfo) error {
 }
 
 // replaceSkillDir swaps a validated staging directory into the final skill
-// path. The previous install is removed only at this point.
-func replaceSkillDir(finalDir, stagingDir string) error {
-	if err := os.RemoveAll(finalDir); err != nil {
-		return fmt.Errorf("failed to replace existing skill: %w", err)
+// path. An existing install is moved aside first and only deleted after the
+// staged rename succeeds, so a failed rename restores the previous tree.
+// Unforced collisions with any pre-existing path are rejected.
+func replaceSkillDir(finalDir, stagingDir string, allowReplace bool) error {
+	_, err := os.Lstat(finalDir)
+	exists := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect install path: %w", err)
 	}
+
+	if exists && !allowReplace {
+		return fmt.Errorf("refusing to overwrite existing path %s (not a force-reinstall of an installed skill)", finalDir)
+	}
+
+	var backupDir string
+	if exists {
+		backupDir, err = os.MkdirTemp(filepath.Dir(finalDir), "."+filepath.Base(finalDir)+".backup-")
+		if err != nil {
+			return fmt.Errorf("failed to create backup directory: %w", err)
+		}
+		// MkdirTemp created an empty dir; remove it so Rename can claim the name.
+		if err := os.Remove(backupDir); err != nil {
+			return fmt.Errorf("failed to prepare backup directory: %w", err)
+		}
+		if err := os.Rename(finalDir, backupDir); err != nil {
+			return fmt.Errorf("failed to move existing skill aside: %w", err)
+		}
+	}
+
 	if err := os.Rename(stagingDir, finalDir); err != nil {
+		if backupDir != "" {
+			if restoreErr := os.Rename(backupDir, finalDir); restoreErr != nil {
+				return fmt.Errorf("failed to install staged skill: %v (also failed to restore previous install: %v)", err, restoreErr)
+			}
+		}
 		return fmt.Errorf("failed to install staged skill: %w", err)
+	}
+
+	if backupDir != "" {
+		_ = os.RemoveAll(backupDir)
 	}
 	return nil
 }
 
-func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
+func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string, opts ExtractOptions) (string, error) {
 	parts := strings.Split(info.TreeRef, "/")
 	if len(parts) < 2 {
-		return fmt.Errorf("ambiguous tree ref has insufficient parts")
+		return "", fmt.Errorf("ambiguous tree ref has insufficient parts")
 	}
 
 	// Try longer branch candidates first.
@@ -310,14 +408,14 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
 		if err != nil {
 			continue
 		}
-		err = installZipAtomically(zipPath, &infoCopy, targetName)
+		finalDir, err := installZipAtomically(zipPath, &infoCopy, targetName, opts)
 		_ = os.Remove(zipPath)
 		if err == nil {
-			return nil
+			return finalDir, nil
 		}
 	}
 
-	return fmt.Errorf("unable to resolve tree ref")
+	return "", fmt.Errorf("unable to resolve tree ref")
 }
 
 // extractZip extracts the zip file to target directory

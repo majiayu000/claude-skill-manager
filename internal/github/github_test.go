@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -143,7 +144,7 @@ func TestForceReinstallKeepsExistingSkillOnExtractFailure(t *testing.T) {
 		Branch: "main",
 		Path:   "docx",
 	}
-	if err := installZipAtomically(zipPath, info, "docx"); err == nil {
+	if _, err := installZipAtomically(zipPath, info, "docx", ExtractOptions{}); err == nil {
 		t.Fatal("expected extract failure for --force reinstall")
 	}
 
@@ -196,7 +197,7 @@ func TestAtomicInstallReplacesExistingSkillOnSuccess(t *testing.T) {
 		Branch: "main",
 		Path:   "docx",
 	}
-	if err := installZipAtomically(zipPath, info, "docx"); err != nil {
+	if _, err := installZipAtomically(zipPath, info, "docx", ExtractOptions{AllowReplace: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -212,6 +213,146 @@ func TestAtomicInstallReplacesExistingSkillOnSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(skillDir, "old-only.txt")); !os.IsNotExist(err) {
 		t.Fatal("expected old-only.txt to be replaced away")
+	}
+}
+
+func TestRejectParentDirectoryTargetNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := writeTestZip(t, map[string]string{
+		"repo-main/docx/SKILL.md": "---\nname: docx\n---\n",
+	})
+	info := &RepoInfo{Owner: "owner", Repo: "repo", Branch: "main", Path: "docx"}
+
+	for _, name := range []string{".", "..", "a/b", "../x", "x/.."} {
+		if _, err := installZipAtomically(zipPath, info, name, ExtractOptions{}); err == nil {
+			t.Fatalf("expected invalid skill name %q to be rejected", name)
+		}
+	}
+
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("skills root should be untouched after rejected names, got %v", entries)
+	}
+}
+
+func TestForceReplaceUsesAliasedInstallPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	aliasDir := filepath.Join(home, ".claude", "skills", "alias")
+	if err := os.MkdirAll(aliasDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(aliasDir, "SKILL.md"), []byte("---\nname: docx\n---\nold\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := writeTestZip(t, map[string]string{
+		"repo-main/docx/SKILL.md": "---\nname: docx\ndescription: refreshed\n---\nnew\n",
+	})
+	info := &RepoInfo{Owner: "owner", Repo: "repo", Branch: "main", Path: "docx"}
+
+	finalDir, err := installZipAtomically(zipPath, info, "docx", ExtractOptions{
+		FinalDir:     aliasDir,
+		AllowReplace: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalDir != aliasDir {
+		t.Fatalf("expected install into alias path, got %s", finalDir)
+	}
+
+	got, err := os.ReadFile(filepath.Join(aliasDir, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "refreshed") {
+		t.Fatalf("alias install was not replaced: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "docx")); !os.IsNotExist(err) {
+		t.Fatal("expected no duplicate skills/docx directory")
+	}
+}
+
+func TestRefuseUnforcedNonSkillCollision(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	collision := filepath.Join(skillsDir, "docx")
+	if err := os.WriteFile(collision, []byte("not a skill dir"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := writeTestZip(t, map[string]string{
+		"repo-main/docx/SKILL.md": "---\nname: docx\n---\n",
+	})
+	info := &RepoInfo{Owner: "owner", Repo: "repo", Branch: "main", Path: "docx"}
+
+	if _, err := installZipAtomically(zipPath, info, "docx", ExtractOptions{}); err == nil {
+		t.Fatal("expected collision with non-skill path to be refused")
+	}
+
+	got, err := os.ReadFile(collision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "not a skill dir" {
+		t.Fatalf("collision path was modified: %q", got)
+	}
+}
+
+func TestReplaceRestoresBackupWhenRenameFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillDir := filepath.Join(home, ".claude", "skills", "docx")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	original := "---\nname: docx\n---\nkeep\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// stagingDir points at a missing path so Rename(staging -> final) fails
+	// after the existing install has already been moved aside.
+	stagingMissing := filepath.Join(home, ".claude", "skills", ".docx.staging-missing")
+	err := replaceSkillDir(skillDir, stagingMissing, true)
+	if err == nil {
+		t.Fatal("expected rename failure")
+	}
+
+	got, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("original skill should be restored after failed rename: %v", err)
+	}
+	if string(got) != original {
+		t.Fatalf("restored contents mismatch: %q", got)
+	}
+}
+
+func TestValidateSkillName(t *testing.T) {
+	if err := validateSkillName("docx"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"", ".", "..", "a/b", `a\b`} {
+		if err := validateSkillName(name); err == nil {
+			t.Fatalf("expected %q to be invalid", name)
+		}
 	}
 }
 

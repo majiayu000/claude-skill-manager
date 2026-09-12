@@ -44,6 +44,12 @@ func List() ([]Skill, error) {
 		if !entry.IsDir() {
 			continue
 		}
+		// Skip hidden / staging directories (e.g. ".docx.staging-XXXX").
+		// Install stages under the skills root; leftovers must not appear as
+		// installed skills if a process exits before cleanup.
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
 
 		skillPath := filepath.Join(skillsDir, entry.Name())
 		skillMdPath := filepath.Join(skillPath, "SKILL.md")

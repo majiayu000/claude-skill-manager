@@ -78,6 +78,41 @@ func TestRemoveDeletesSkillDir(t *testing.T) {
 	}
 }
 
+func TestListSkipsStagingDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	staging := filepath.Join(skillsDir, ".docx.staging-abc123")
+	if err := os.MkdirAll(staging, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "SKILL.md"), []byte("---\nname: docx\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(skillsDir, "docx")
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "SKILL.md"), []byte("---\nname: docx\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected only the real skill, got %#v", skills)
+	}
+	if filepath.Base(skills[0].Path) != "docx" {
+		t.Fatalf("unexpected skill path: %s", skills[0].Path)
+	}
+	if Exists(".docx.staging-abc123") {
+		t.Fatal("staging directory must not match Exists")
+	}
+}
+
 func TestRemoveMissingSkill(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

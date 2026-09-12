@@ -168,7 +168,36 @@ func trimDelimiter(line string) string {
 	return strings.TrimRight(line, " \t\r")
 }
 
-// GetSkillDir returns the full path for a skill
+// ValidateSkillName rejects names that can escape the skills directory when
+// joined with filepath.Join (absolute paths, "..", or path separators).
+func ValidateSkillName(name string) error {
+	if name == "" {
+		return fmt.Errorf("invalid skill name: must not be empty")
+	}
+	if filepath.IsAbs(name) {
+		return fmt.Errorf("invalid skill name %q: must not be an absolute path", name)
+	}
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\') {
+		return fmt.Errorf("invalid skill name %q: must not contain path separators", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid skill name %q: must not be a path reference", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("invalid skill name %q: must not contain '..'", name)
+	}
+	if filepath.Clean(name) != name {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	return nil
+}
+
+// GetSkillDir returns the full path for a skill. Invalid names refuse to
+// leave the skills root (callers should validate earlier for clear errors).
 func GetSkillDir(name string) string {
-	return filepath.Join(config.GetSkillsDir(), name)
+	skillsDir := config.GetSkillsDir()
+	if err := ValidateSkillName(name); err != nil {
+		return skillsDir
+	}
+	return filepath.Join(skillsDir, name)
 }

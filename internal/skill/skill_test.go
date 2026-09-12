@@ -127,3 +127,48 @@ func TestExtractFrontMatterStripsBOM(t *testing.T) {
 		t.Fatalf("unexpected block: %q", block)
 	}
 }
+
+func TestValidateSkillNameRejectsPathEscape(t *testing.T) {
+	valid := []string{"docx", "my-skill", "skill_1", "frontend.testing"}
+	for _, name := range valid {
+		if err := ValidateSkillName(name); err != nil {
+			t.Fatalf("ValidateSkillName(%q): unexpected error: %v", name, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"/tmp/pwned-skill",
+		"../outside",
+		"..",
+		".",
+		"nested/name",
+		`nested\name`,
+		"foo/../bar",
+		"owner/repo/..",
+	}
+	for _, name := range invalid {
+		if err := ValidateSkillName(name); err == nil {
+			t.Fatalf("ValidateSkillName(%q): expected error", name)
+		}
+	}
+}
+
+func TestGetSkillDirRefusesEscape(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	skillsDir := filepath.Join(home, ".claude", "skills")
+
+	got := GetSkillDir("docx")
+	want := filepath.Join(skillsDir, "docx")
+	if got != want {
+		t.Fatalf("GetSkillDir(docx) = %q, want %q", got, want)
+	}
+
+	if got := GetSkillDir("/tmp/pwned-skill"); got != skillsDir {
+		t.Fatalf("GetSkillDir(absolute) = %q, want skills root %q", got, skillsDir)
+	}
+	if got := GetSkillDir("../outside"); got != skillsDir {
+		t.Fatalf("GetSkillDir(..) = %q, want skills root %q", got, skillsDir)
+	}
+}

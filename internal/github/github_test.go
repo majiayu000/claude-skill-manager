@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -110,5 +111,34 @@ func TestDownloadToTempFileWritesBody(t *testing.T) {
 	}
 	if string(data) != "zip-bytes" {
 		t.Fatalf("unexpected body: %q", data)
+	}
+}
+
+func TestResolveSkillsTargetDirRejectsEscape(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	got, err := resolveSkillsTargetDir("safe-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(skillsDir, "safe-skill")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	for _, name := range []string{"/tmp/pwned-skill", "../outside", "..", "nested/name"} {
+		if _, err := resolveSkillsTargetDir(name); err == nil {
+			t.Fatalf("resolveSkillsTargetDir(%q): expected error", name)
+		}
+	}
+}
+
+func TestDownloadAndExtractRejectsEscapingNameBeforeDownload(t *testing.T) {
+	info := &RepoInfo{Owner: "o", Repo: "r", Branch: "main"}
+	err := DownloadAndExtract(info, "../outside")
+	if err == nil {
+		t.Fatal("expected escaping target name to fail before download")
 	}
 }

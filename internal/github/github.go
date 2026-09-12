@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/majiayu000/claude-skill-manager/internal/config"
+	"github.com/majiayu000/claude-skill-manager/internal/skill"
 )
 
 // downloadClient is used for repository archive downloads. Archives can be
@@ -187,6 +188,11 @@ func normalizeSkillPath(info *RepoInfo) {
 
 // DownloadAndExtract downloads a repository and extracts to skills directory
 func DownloadAndExtract(info *RepoInfo, targetName string) error {
+	targetDir, err := resolveSkillsTargetDir(targetName)
+	if err != nil {
+		return err
+	}
+
 	// Ensure skills directory exists
 	if err := config.EnsureSkillsDir(); err != nil {
 		return fmt.Errorf("failed to create skills directory: %w", err)
@@ -205,8 +211,6 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 		return err
 	}
 	defer func() { _ = os.Remove(zipPath) }()
-
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
 
 	// Try the specified path first
 	err = extractZip(zipPath, targetDir, info)
@@ -268,14 +272,32 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
 }
 
 func downloadAndExtractWithBranch(info *RepoInfo, targetName string) error {
+	targetDir, err := resolveSkillsTargetDir(targetName)
+	if err != nil {
+		return err
+	}
+
 	zipPath, err := downloadToTempFile(archiveURL(info))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
 	return extractZip(zipPath, targetDir, info)
+}
+
+// resolveSkillsTargetDir joins targetName under the skills root and requires
+// the result to stay inside that directory (defense in depth for path escape).
+func resolveSkillsTargetDir(targetName string) (string, error) {
+	if err := skill.ValidateSkillName(targetName); err != nil {
+		return "", err
+	}
+	skillsDir := config.GetSkillsDir()
+	targetDir := filepath.Clean(filepath.Join(skillsDir, targetName))
+	if !isWithinDir(skillsDir, targetDir) {
+		return "", fmt.Errorf("skill target %q escapes skills directory", targetName)
+	}
+	return targetDir, nil
 }
 
 // extractZip extracts the zip file to target directory

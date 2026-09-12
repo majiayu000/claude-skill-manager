@@ -186,16 +186,23 @@ func normalizeSkillPath(info *RepoInfo) {
 	}
 }
 
-// DownloadAndExtract downloads a repository and extracts to skills directory
-func DownloadAndExtract(info *RepoInfo, targetName string) error {
-	targetDir, err := resolveSkillsTargetDir(targetName)
-	if err != nil {
-		return err
-	}
+// ExtractOptions controls where a downloaded skill is installed and whether an
+// existing path may be replaced. FinalDir, when set, must already be an
+// identified skill directory being force-reinstalled (for example an aliased
+// install whose directory basename differs from the front-matter name).
+type ExtractOptions struct {
+	FinalDir     string
+	AllowReplace bool
+}
 
-	// Ensure skills directory exists
+// DownloadAndExtract downloads a repository and extracts to the skills directory.
+// Extraction always goes into a staging directory under the skills root; the
+// existing skill (if any) is replaced only after the new tree validates.
+// On any failure before that swap, the previous install is left intact.
+// It returns the final install directory on success.
+func DownloadAndExtract(info *RepoInfo, targetName string, opts ExtractOptions) (string, error) {
 	if err := config.EnsureSkillsDir(); err != nil {
-		return fmt.Errorf("failed to create skills directory: %w", err)
+		return "", fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
 	// Download as zip
@@ -208,47 +215,174 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 		zipPath, err = downloadToTempFile(archiveURL(info))
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	// Try the specified path first
-	err = extractZip(zipPath, targetDir, info)
-	if err != nil && info.Path != "" {
-		// If path doesn't work, try common skill locations
-		// e.g., "docx" -> "skills/docx" for anthropics/skills repo
-		alternativePaths := []string{
-			"skills/" + info.Path,
-			"skill/" + info.Path,
+	finalDir, err := installZipAtomically(zipPath, info, targetName, opts)
+	if err != nil && info.TreeRef != "" && info.TreeRefAmbiguous {
+		if resolved, resolveErr := tryResolveAmbiguousTreeRef(info, targetName, opts); resolveErr == nil {
+			return resolved, nil
 		}
+		return "", fmt.Errorf("%w (if your branch contains '/', URL-encode it, e.g. feature%%2Ffoo)", err)
+	}
+	return finalDir, err
+}
 
-		for _, altPath := range alternativePaths {
-			infoCopy := *info
-			infoCopy.Path = altPath
-			_ = removeSkillTargetDir(targetDir) // Clean up failed attempt
-			if err = extractZip(zipPath, targetDir, &infoCopy); err == nil {
-				return nil
-			}
-		}
+// installZipAtomically extracts a downloaded zip into a staging directory under
+// the skills root, validates it, then swaps it into the final install path.
+// On any failure before the swap, an existing skill at that path is left untouched.
+func installZipAtomically(zipPath string, info *RepoInfo, targetName string, opts ExtractOptions) (string, error) {
+	if err := config.EnsureSkillsDir(); err != nil {
+		return "", fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
+	skillsDir := config.GetSkillsDir()
+	skill.RecoverOrphanedInstallerDirs(skillsDir)
+	finalDir, err := resolveFinalSkillDir(skillsDir, targetName, opts.FinalDir)
 	if err != nil {
-		if info.TreeRef != "" && info.TreeRefAmbiguous {
-			if resolveErr := tryResolveAmbiguousTreeRef(info, targetName); resolveErr == nil {
-				return nil
-			}
-			return fmt.Errorf("failed to extract: %w (if your branch contains '/', URL-encode it, e.g. feature%%2Ffoo)", err)
-		}
-		return fmt.Errorf("failed to extract: %w", err)
+		return "", err
 	}
 
+	stagingDir, err := os.MkdirTemp(skillsDir, "."+filepath.Base(finalDir)+".staging-")
+	if err != nil {
+		return "", fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	swapped := false
+	defer func() {
+		if !swapped {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
+
+	if err := extractZipWithFallbacks(zipPath, stagingDir, info); err != nil {
+		return "", fmt.Errorf("failed to extract: %w", err)
+	}
+	if err := replaceSkillDir(finalDir, stagingDir, opts.AllowReplace); err != nil {
+		return "", err
+	}
+	swapped = true
+	return finalDir, nil
+}
+
+// resolveFinalSkillDir validates targetName (or an explicit FinalDir override)
+// so the install path is always a single safe component strictly under skillsDir.
+func resolveFinalSkillDir(skillsDir, targetName, overrideFinalDir string) (string, error) {
+	skillsDir = filepath.Clean(skillsDir)
+
+	var finalDir string
+	if overrideFinalDir != "" {
+		finalDir = filepath.Clean(overrideFinalDir)
+	} else {
+		if err := validateSkillName(targetName); err != nil {
+			return "", err
+		}
+		finalDir = filepath.Join(skillsDir, targetName)
+	}
+
+	if !isStrictlyWithinDir(skillsDir, finalDir) {
+		return "", fmt.Errorf("refusing to install outside skills directory: %s", finalDir)
+	}
+	if err := validateSkillName(filepath.Base(finalDir)); err != nil {
+		return "", err
+	}
+	return finalDir, nil
+}
+
+func validateSkillName(name string) error {
+	return skill.ValidateSkillName(name)
+}
+
+// isStrictlyWithinDir reports whether target is a path strictly contained under
+// root (root itself is rejected).
+func isStrictlyWithinDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if root == target {
+		return false
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// extractZipWithFallbacks extracts into stagingDir, trying common alternate
+// skill paths when the primary path does not contain a valid skill.
+func extractZipWithFallbacks(zipPath, stagingDir string, info *RepoInfo) error {
+	err := extractZip(zipPath, stagingDir, info)
+	if err == nil || info.Path == "" {
+		return err
+	}
+
+	// If path doesn't work, try common skill locations
+	// e.g., "docx" -> "skills/docx" for anthropics/skills repo
+	alternativePaths := []string{
+		"skills/" + info.Path,
+		"skill/" + info.Path,
+	}
+
+	for _, altPath := range alternativePaths {
+		infoCopy := *info
+		infoCopy.Path = altPath
+		_ = os.RemoveAll(stagingDir)
+		if err = extractZip(zipPath, stagingDir, &infoCopy); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// replaceSkillDir swaps a validated staging directory into the final skill
+// path. An existing install is moved aside first and only deleted after the
+// staged rename succeeds, so a failed rename restores the previous tree.
+// Unforced collisions with any pre-existing path are rejected.
+func replaceSkillDir(finalDir, stagingDir string, allowReplace bool) error {
+	_, err := os.Lstat(finalDir)
+	exists := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect install path: %w", err)
+	}
+
+	if exists && !allowReplace {
+		return fmt.Errorf("refusing to overwrite existing path %s (not a force-reinstall of an installed skill)", finalDir)
+	}
+
+	var backupDir string
+	if exists {
+		backupDir, err = os.MkdirTemp(filepath.Dir(finalDir), "."+filepath.Base(finalDir)+".backup-")
+		if err != nil {
+			return fmt.Errorf("failed to create backup directory: %w", err)
+		}
+		// MkdirTemp created an empty dir; remove it so Rename can claim the name.
+		if err := os.Remove(backupDir); err != nil {
+			return fmt.Errorf("failed to prepare backup directory: %w", err)
+		}
+		if err := os.Rename(finalDir, backupDir); err != nil {
+			return fmt.Errorf("failed to move existing skill aside: %w", err)
+		}
+	}
+
+	if err := os.Rename(stagingDir, finalDir); err != nil {
+		if backupDir != "" {
+			if restoreErr := os.Rename(backupDir, finalDir); restoreErr != nil {
+				return fmt.Errorf("failed to install staged skill: %v (also failed to restore previous install: %v)", err, restoreErr)
+			}
+		}
+		return fmt.Errorf("failed to install staged skill: %w", err)
+	}
+
+	if backupDir != "" {
+		_ = os.RemoveAll(backupDir)
+	}
 	return nil
 }
 
-func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
+func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string, opts ExtractOptions) (string, error) {
 	parts := strings.Split(info.TreeRef, "/")
 	if len(parts) < 2 {
-		return fmt.Errorf("ambiguous tree ref has insufficient parts")
+		return "", fmt.Errorf("ambiguous tree ref has insufficient parts")
 	}
 
 	// Try longer branch candidates first.
@@ -263,53 +397,18 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
 		infoCopy.Branch = branch
 		infoCopy.Path = path
 
-		if err := downloadAndExtractWithBranch(&infoCopy, targetName); err == nil {
-			return nil
+		zipPath, err := downloadToTempFile(archiveURL(&infoCopy))
+		if err != nil {
+			continue
+		}
+		finalDir, err := installZipAtomically(zipPath, &infoCopy, targetName, opts)
+		_ = os.Remove(zipPath)
+		if err == nil {
+			return finalDir, nil
 		}
 	}
 
-	return fmt.Errorf("unable to resolve tree ref")
-}
-
-func downloadAndExtractWithBranch(info *RepoInfo, targetName string) error {
-	targetDir, err := resolveSkillsTargetDir(targetName)
-	if err != nil {
-		return err
-	}
-
-	zipPath, err := downloadToTempFile(archiveURL(info))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(zipPath) }()
-
-	return extractZip(zipPath, targetDir, info)
-}
-
-// resolveSkillsTargetDir joins targetName under the skills root and requires
-// the result to be a strict subdirectory (defense in depth for path escape and
-// skills-root wipe via name "." / Join-cleaning aliases).
-func resolveSkillsTargetDir(targetName string) (string, error) {
-	if err := skill.ValidateSkillName(targetName); err != nil {
-		return "", err
-	}
-	skillsDir := filepath.Clean(config.GetSkillsDir())
-	targetDir := filepath.Clean(filepath.Join(skillsDir, targetName))
-	if !isStrictSubdir(skillsDir, targetDir) {
-		return "", fmt.Errorf("skill target %q is not a subdirectory of the skills directory", targetName)
-	}
-	return targetDir, nil
-}
-
-// removeSkillTargetDir deletes targetDir only when it is a strict subdirectory
-// of the skills root. Never RemoveAll the skills directory itself (SEC-08).
-func removeSkillTargetDir(targetDir string) error {
-	skillsDir := filepath.Clean(config.GetSkillsDir())
-	targetDir = filepath.Clean(targetDir)
-	if !isStrictSubdir(skillsDir, targetDir) {
-		return fmt.Errorf("refusing to remove %q: not a skill subdirectory of %q", targetDir, skillsDir)
-	}
-	return os.RemoveAll(targetDir)
+	return "", fmt.Errorf("unable to resolve tree ref")
 }
 
 // extractZip extracts the zip file to target directory
@@ -403,8 +502,8 @@ func extractZip(zipPath, targetDir string, info *RepoInfo) error {
 	// Verify SKILL.md exists
 	skillMdPath := filepath.Join(targetDir, "SKILL.md")
 	if _, err := os.Stat(skillMdPath); os.IsNotExist(err) {
-		// Clean up only a validated skill subdirectory (never the skills root).
-		_ = removeSkillTargetDir(targetDir)
+		// Clean up
+		_ = os.RemoveAll(targetDir)
 		if extractedFiles == 0 {
 			return fmt.Errorf("no files found at path '%s' - check if the path is correct", info.Path)
 		}
@@ -451,7 +550,7 @@ func extractSkillFile(r *zip.ReadCloser, rootPrefix, targetDir, filePath string)
 		return err
 	}
 
-	_ = removeSkillTargetDir(targetDir)
+	_ = os.RemoveAll(targetDir)
 	return fmt.Errorf("no file found at path '%s' - check if the path is correct", filePath)
 }
 
@@ -463,18 +562,6 @@ func isWithinDir(root, target string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// isStrictSubdir reports whether target is inside root but not root itself.
-// Issue #31's isWithinDir still accepts rel == ".", which is insufficient for
-// SEC-08 (skill name "." making targetDir equal the skills root).
-func isStrictSubdir(root, target string) bool {
-	root = filepath.Clean(root)
-	target = filepath.Clean(target)
-	if root == target {
-		return false
-	}
-	return isWithinDir(root, target)
 }
 
 // GetSkillName determines the skill name from RepoInfo

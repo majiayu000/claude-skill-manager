@@ -66,9 +66,15 @@ Supported formats:
 			os.Exit(1)
 		}
 
-		// Check if already installed. Exists() scans and parses every installed
-		// SKILL.md, so resolve it once and reuse the answer.
-		alreadyInstalled := skill.Exists(skillName)
+		// Resolve once: Exists/Get scan and parse every installed SKILL.md.
+		// Prefer the matched directory path so --force replaces an aliased
+		// install (dir basename != front-matter name) instead of creating a duplicate.
+		existing, existingErr := skill.Get(skillName)
+		if existingErr != nil {
+			fmt.Println(styles.RenderError("Failed to check installed skills: " + existingErr.Error()))
+			os.Exit(1)
+		}
+		alreadyInstalled := existing != nil
 
 		if alreadyInstalled && !installForce {
 			fmt.Println(styles.RenderWarning(fmt.Sprintf("Skill '%s' is already installed.", skillName)))
@@ -76,32 +82,26 @@ Supported formats:
 			os.Exit(1)
 		}
 
-		// Remove existing if force
+		opts := github.ExtractOptions{}
 		if alreadyInstalled && installForce {
-			if err := skill.Remove(skillName); err != nil {
-				fmt.Println(styles.RenderError("Failed to remove existing skill: " + err.Error()))
-				os.Exit(1)
-			}
+			opts.FinalDir = existing.Path
+			opts.AllowReplace = true
 		}
+
+		// Do not remove the existing skill before download/extract. DownloadAndExtract
+		// stages into a temp directory and swaps only after SKILL.md validates, so a
+		// failed --force reinstall leaves the working install intact.
 
 		fmt.Println()
 		fmt.Printf("%s Installing %s\n", styles.SpinnerStyle.Render("⠋"), styles.CodeStyle.Render(skillName))
 		fmt.Printf("  %s %s\n", styles.MutedStyle.Render("from"), info.FullURL)
 		fmt.Println()
 
-		// Download and install with spinner
-		err = ui.RunWithSpinner("Downloading...", func() (string, error) {
-			if err := github.DownloadAndExtract(info, skillName); err != nil {
-				return "", err
-			}
-
-			// Get installed skill info
-			s, _ := skill.Get(skillName)
-			result := styles.RenderSuccess(fmt.Sprintf("Installed %s", styles.CodeStyle.Render(skillName)))
-			if s != nil && s.Description != "" {
-				result += "\n  " + styles.SkillDescStyle.Render(s.Description)
-			}
-			return result, nil
+		// Download and install with spinner. RunWithSpinner waits for the worker
+		// before returning, so the returned install path is synchronized even if
+		// the TTY UI quits early (q / Ctrl+C).
+		installPath, err := ui.RunWithSpinner("Downloading...", func() (string, error) {
+			return github.DownloadAndExtract(info, skillName, opts)
 		})
 
 		if err != nil {
@@ -109,8 +109,16 @@ Supported formats:
 			os.Exit(1)
 		}
 
+		if installPath == "" {
+			installPath = skill.GetSkillDir(skillName)
+		}
+		s, _ := skill.Get(skillName)
+		fmt.Println(styles.RenderSuccess(fmt.Sprintf("Installed %s", styles.CodeStyle.Render(skillName))))
+		if s != nil && s.Description != "" {
+			fmt.Println("  " + styles.SkillDescStyle.Render(s.Description))
+		}
 		fmt.Println()
-		fmt.Println(styles.MutedStyle.Render("  Skill installed to: ") + skill.GetSkillDir(skillName))
+		fmt.Println(styles.MutedStyle.Render("  Skill installed to: ") + installPath)
 		fmt.Println()
 	},
 }

@@ -31,6 +31,10 @@ type SkillMeta struct {
 func List() ([]Skill, error) {
 	skillsDir := config.GetSkillsDir()
 
+	// Restore skills left under .*.backup-* after an interrupted swap, then
+	// drop leftover staging directories so they never appear as installs.
+	recoverOrphanedInstallerDirs(skillsDir)
+
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -42,6 +46,12 @@ func List() ([]Skill, error) {
 	var skills []Skill
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		// Skip installer-owned temp dirs (e.g. ".docx.staging-XXXX",
+		// ".docx.backup-XXXX"). Do not skip all dotted names — custom installs
+		// like --name .foo must remain discoverable via List/Get/Exists.
+		if isInstallerTempDir(entry.Name()) {
 			continue
 		}
 
@@ -166,6 +176,122 @@ func extractFrontMatter(text string) (string, bool) {
 
 func trimDelimiter(line string) string {
 	return strings.TrimRight(line, " \t\r")
+}
+
+// isInstallerTempDir reports whether name matches install staging/backup
+// directories created under the skills root (MkdirTemp prefixes
+// ".<base>.staging-" / ".<base>.backup-"). User-chosen names that merely
+// contain those substrings (e.g. "foo.backup-prod") are not matched.
+func isInstallerTempDir(name string) bool {
+	_, kind, ok := parseInstallerTempName(name)
+	return ok && (kind == installerTempStaging || kind == installerTempBackup)
+}
+
+type installerTempKind int
+
+const (
+	installerTempStaging installerTempKind = iota + 1
+	installerTempBackup
+)
+
+// parseInstallerTempName recognizes ".<base>.staging-<suffix>" and
+// ".<base>.backup-<suffix>" names produced by os.MkdirTemp.
+func parseInstallerTempName(name string) (base string, kind installerTempKind, ok bool) {
+	if !strings.HasPrefix(name, ".") {
+		return "", 0, false
+	}
+	rest := name[1:]
+	const staging = ".staging-"
+	const backup = ".backup-"
+	stagingIdx := strings.Index(rest, staging)
+	backupIdx := strings.Index(rest, backup)
+
+	var marker string
+	var idx int
+	switch {
+	case stagingIdx >= 0 && (backupIdx < 0 || stagingIdx <= backupIdx):
+		marker, idx, kind = staging, stagingIdx, installerTempStaging
+	case backupIdx >= 0:
+		marker, idx, kind = backup, backupIdx, installerTempBackup
+	default:
+		return "", 0, false
+	}
+
+	base = rest[:idx]
+	suffix := rest[idx+len(marker):]
+	if base == "" || suffix == "" {
+		return "", 0, false
+	}
+	if strings.ContainsAny(base, `/\`) {
+		return "", 0, false
+	}
+	return base, kind, true
+}
+
+// RecoverOrphanedInstallerDirs restores backups left behind when a force
+// reinstall was interrupted after moving the old skill aside, and removes
+// leftover staging directories.
+func RecoverOrphanedInstallerDirs(skillsDir string) {
+	recoverOrphanedInstallerDirs(skillsDir)
+}
+
+// recoverOrphanedInstallerDirs restores backups left behind when a force
+// reinstall was interrupted after moving the old skill aside, and removes
+// leftover staging directories.
+func recoverOrphanedInstallerDirs(skillsDir string) {
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return
+	}
+
+	type backupCandidate struct {
+		path    string
+		modTime time.Time
+	}
+	backups := map[string]backupCandidate{}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		base, kind, ok := parseInstallerTempName(name)
+		if !ok {
+			continue
+		}
+		fullPath := filepath.Join(skillsDir, name)
+		if kind == installerTempStaging {
+			_ = os.RemoveAll(fullPath)
+			continue
+		}
+
+		if _, err := os.Stat(filepath.Join(fullPath, "SKILL.md")); err != nil {
+			continue
+		}
+		finalPath := filepath.Join(skillsDir, base)
+		if _, err := os.Lstat(finalPath); err == nil {
+			continue
+		} else if err != nil && !os.IsNotExist(err) {
+			continue
+		}
+
+		modTime := time.Time{}
+		if info, err := entry.Info(); err == nil {
+			modTime = info.ModTime()
+		}
+		if prev, exists := backups[base]; exists && !modTime.After(prev.modTime) {
+			continue
+		}
+		backups[base] = backupCandidate{path: fullPath, modTime: modTime}
+	}
+
+	for base, candidate := range backups {
+		finalPath := filepath.Join(skillsDir, base)
+		if _, err := os.Lstat(finalPath); err == nil || (err != nil && !os.IsNotExist(err)) {
+			continue
+		}
+		_ = os.Rename(candidate.path, finalPath)
+	}
 }
 
 // ValidateSkillName rejects names that are empty, ".", "..", contain path

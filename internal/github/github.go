@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/majiayu000/claude-skill-manager/internal/config"
+	"github.com/majiayu000/claude-skill-manager/internal/skill"
 )
 
 // downloadClient is used for repository archive downloads. Archives can be
@@ -187,6 +188,11 @@ func normalizeSkillPath(info *RepoInfo) {
 
 // DownloadAndExtract downloads a repository and extracts to skills directory
 func DownloadAndExtract(info *RepoInfo, targetName string) error {
+	targetDir, err := resolveSkillsTargetDir(targetName)
+	if err != nil {
+		return err
+	}
+
 	// Ensure skills directory exists
 	if err := config.EnsureSkillsDir(); err != nil {
 		return fmt.Errorf("failed to create skills directory: %w", err)
@@ -206,8 +212,6 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
-
 	// Try the specified path first
 	err = extractZip(zipPath, targetDir, info)
 	if err != nil && info.Path != "" {
@@ -221,7 +225,7 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 		for _, altPath := range alternativePaths {
 			infoCopy := *info
 			infoCopy.Path = altPath
-			os.RemoveAll(targetDir) // Clean up failed attempt
+			_ = removeSkillTargetDir(targetDir) // Clean up failed attempt
 			if err = extractZip(zipPath, targetDir, &infoCopy); err == nil {
 				return nil
 			}
@@ -268,14 +272,44 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
 }
 
 func downloadAndExtractWithBranch(info *RepoInfo, targetName string) error {
+	targetDir, err := resolveSkillsTargetDir(targetName)
+	if err != nil {
+		return err
+	}
+
 	zipPath, err := downloadToTempFile(archiveURL(info))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
 	return extractZip(zipPath, targetDir, info)
+}
+
+// resolveSkillsTargetDir joins targetName under the skills root and requires
+// the result to be a strict subdirectory (defense in depth for path escape and
+// skills-root wipe via name "." / Join-cleaning aliases).
+func resolveSkillsTargetDir(targetName string) (string, error) {
+	if err := skill.ValidateSkillName(targetName); err != nil {
+		return "", err
+	}
+	skillsDir := filepath.Clean(config.GetSkillsDir())
+	targetDir := filepath.Clean(filepath.Join(skillsDir, targetName))
+	if !isStrictSubdir(skillsDir, targetDir) {
+		return "", fmt.Errorf("skill target %q is not a subdirectory of the skills directory", targetName)
+	}
+	return targetDir, nil
+}
+
+// removeSkillTargetDir deletes targetDir only when it is a strict subdirectory
+// of the skills root. Never RemoveAll the skills directory itself (SEC-08).
+func removeSkillTargetDir(targetDir string) error {
+	skillsDir := filepath.Clean(config.GetSkillsDir())
+	targetDir = filepath.Clean(targetDir)
+	if !isStrictSubdir(skillsDir, targetDir) {
+		return fmt.Errorf("refusing to remove %q: not a skill subdirectory of %q", targetDir, skillsDir)
+	}
+	return os.RemoveAll(targetDir)
 }
 
 // extractZip extracts the zip file to target directory
@@ -369,8 +403,8 @@ func extractZip(zipPath, targetDir string, info *RepoInfo) error {
 	// Verify SKILL.md exists
 	skillMdPath := filepath.Join(targetDir, "SKILL.md")
 	if _, err := os.Stat(skillMdPath); os.IsNotExist(err) {
-		// Clean up
-		os.RemoveAll(targetDir)
+		// Clean up only a validated skill subdirectory (never the skills root).
+		_ = removeSkillTargetDir(targetDir)
 		if extractedFiles == 0 {
 			return fmt.Errorf("no files found at path '%s' - check if the path is correct", info.Path)
 		}
@@ -417,7 +451,7 @@ func extractSkillFile(r *zip.ReadCloser, rootPrefix, targetDir, filePath string)
 		return err
 	}
 
-	_ = os.RemoveAll(targetDir)
+	_ = removeSkillTargetDir(targetDir)
 	return fmt.Errorf("no file found at path '%s' - check if the path is correct", filePath)
 }
 
@@ -429,6 +463,18 @@ func isWithinDir(root, target string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// isStrictSubdir reports whether target is inside root but not root itself.
+// Issue #31's isWithinDir still accepts rel == ".", which is insufficient for
+// SEC-08 (skill name "." making targetDir equal the skills root).
+func isStrictSubdir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if root == target {
+		return false
+	}
+	return isWithinDir(root, target)
 }
 
 // GetSkillName determines the skill name from RepoInfo

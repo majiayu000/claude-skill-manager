@@ -168,7 +168,43 @@ func trimDelimiter(line string) string {
 	return strings.TrimRight(line, " \t\r")
 }
 
-// GetSkillDir returns the full path for a skill
+// ValidateSkillName rejects names that are empty, ".", "..", contain path
+// separators, or do not Clean to a single base path segment. This blocks
+// Join-cleaning aliases that would make filepath.Join(skillsDir, name) equal
+// the skills root (SEC-08) or escape it (SEC-07).
+func ValidateSkillName(name string) error {
+	if name == "" {
+		return fmt.Errorf("invalid skill name: must not be empty")
+	}
+	if filepath.IsAbs(name) {
+		return fmt.Errorf("invalid skill name %q: must not be an absolute path", name)
+	}
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\') {
+		return fmt.Errorf("invalid skill name %q: must not contain path separators", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid skill name %q: must not be a path reference", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("invalid skill name %q: must not contain '..'", name)
+	}
+	cleaned := filepath.Clean(name)
+	if cleaned != name {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	// Require a single base segment after Clean (not ".", "..", or nested).
+	if cleaned == "." || cleaned == ".." || filepath.Base(cleaned) != cleaned {
+		return fmt.Errorf("invalid skill name %q: must be a single path segment", name)
+	}
+	return nil
+}
+
+// GetSkillDir returns the full path for a skill. Invalid names refuse to
+// leave the skills root (callers should validate earlier for clear errors).
 func GetSkillDir(name string) string {
-	return filepath.Join(config.GetSkillsDir(), name)
+	skillsDir := config.GetSkillsDir()
+	if err := ValidateSkillName(name); err != nil {
+		return skillsDir
+	}
+	return filepath.Join(skillsDir, name)
 }

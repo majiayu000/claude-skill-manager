@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -110,5 +111,108 @@ func TestDownloadToTempFileWritesBody(t *testing.T) {
 	}
 	if string(data) != "zip-bytes" {
 		t.Fatalf("unexpected body: %q", data)
+	}
+}
+
+func TestResolveSkillsTargetDirRejectsEscape(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	got, err := resolveSkillsTargetDir("safe-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(skillsDir, "safe-skill")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	// Escape outside skills dir (SEC-07) and skills-root aliases (SEC-08).
+	for _, name := range []string{"/tmp/pwned-skill", "../outside", "..", ".", "nested/name"} {
+		if _, err := resolveSkillsTargetDir(name); err == nil {
+			t.Fatalf("resolveSkillsTargetDir(%q): expected error", name)
+		}
+	}
+}
+
+func TestDownloadAndExtractRejectsEscapingNameBeforeDownload(t *testing.T) {
+	info := &RepoInfo{Owner: "o", Repo: "r", Branch: "main"}
+	for _, name := range []string{"../outside", "."} {
+		err := DownloadAndExtract(info, name)
+		if err == nil {
+			t.Fatalf("expected target name %q to fail before download", name)
+		}
+	}
+}
+
+func TestIsStrictSubdirRejectsSkillsRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	// SEC-08: isWithinDir still accepts rel == ".", so escape checks alone are insufficient.
+	if !isWithinDir(root, root) {
+		t.Fatal("expected isWithinDir(root, root) == true (rel == \".\")")
+	}
+	if isStrictSubdir(root, root) {
+		t.Fatal("skills root must not count as a strict subdirectory of itself")
+	}
+	child := filepath.Join(root, "docx")
+	if !isStrictSubdir(root, child) {
+		t.Fatalf("expected %q to be a strict subdirectory of %q", child, root)
+	}
+}
+
+func TestRemoveSkillTargetDirRefusesSkillsRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	keepDir := filepath.Join(skillsDir, "keep-me")
+	if err := os.MkdirAll(keepDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	keepFile := filepath.Join(keepDir, "SKILL.md")
+	if err := os.WriteFile(keepFile, []byte("---\nname: keep-me\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the pre-fix cleanup path where targetDir == skillsDir (name ".").
+	if err := removeSkillTargetDir(skillsDir); err == nil {
+		t.Fatal("expected removeSkillTargetDir(skills root) to refuse")
+	}
+
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("populated skills root must survive refused RemoveAll: %v", err)
+	}
+}
+
+func TestRemoveSkillTargetDirRemovesOnlySkillSubdir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	keepDir := filepath.Join(skillsDir, "keep-me")
+	badDir := filepath.Join(skillsDir, "bad-extract")
+	if err := os.MkdirAll(keepDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(badDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	keepFile := filepath.Join(keepDir, "SKILL.md")
+	if err := os.WriteFile(keepFile, []byte("---\nname: keep-me\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "partial.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeSkillTargetDir(badDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(badDir); !os.IsNotExist(err) {
+		t.Fatalf("expected bad-extract removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("sibling skill must remain: %v", err)
 	}
 }

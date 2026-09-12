@@ -61,6 +61,11 @@ Supported formats:
 			skillName = github.GetSkillName(info)
 		}
 
+		if err := skill.ValidateSkillName(skillName); err != nil {
+			fmt.Println(styles.RenderError(err.Error()))
+			os.Exit(1)
+		}
+
 		// Check if already installed. Exists() scans and parses every installed
 		// SKILL.md, so resolve it once and reuse the answer.
 		alreadyInstalled := skill.Exists(skillName)

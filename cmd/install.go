@@ -71,13 +71,9 @@ Supported formats:
 			os.Exit(1)
 		}
 
-		// Remove existing if force
-		if alreadyInstalled && installForce {
-			if err := skill.Remove(skillName); err != nil {
-				fmt.Println(styles.RenderError("Failed to remove existing skill: " + err.Error()))
-				os.Exit(1)
-			}
-		}
+		// Do not remove the existing skill before download/extract. DownloadAndExtract
+		// stages into a temp directory and swaps only after SKILL.md validates, so a
+		// failed --force reinstall leaves the working install intact.
 
 		fmt.Println()
 		fmt.Printf("%s Installing %s\n", styles.SpinnerStyle.Render("⠋"), styles.CodeStyle.Render(skillName))

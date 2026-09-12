@@ -185,9 +185,11 @@ func normalizeSkillPath(info *RepoInfo) {
 	}
 }
 
-// DownloadAndExtract downloads a repository and extracts to skills directory
+// DownloadAndExtract downloads a repository and extracts to skills directory.
+// Extraction always goes into a staging directory under the skills root; the
+// existing skill (if any) is replaced only after the new tree validates.
+// On any failure before that swap, the previous install is left intact.
 func DownloadAndExtract(info *RepoInfo, targetName string) error {
-	// Ensure skills directory exists
 	if err := config.EnsureSkillsDir(); err != nil {
 		return fmt.Errorf("failed to create skills directory: %w", err)
 	}
@@ -206,38 +208,83 @@ func DownloadAndExtract(info *RepoInfo, targetName string) error {
 	}
 	defer func() { _ = os.Remove(zipPath) }()
 
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
-
-	// Try the specified path first
-	err = extractZip(zipPath, targetDir, info)
-	if err != nil && info.Path != "" {
-		// If path doesn't work, try common skill locations
-		// e.g., "docx" -> "skills/docx" for anthropics/skills repo
-		alternativePaths := []string{
-			"skills/" + info.Path,
-			"skill/" + info.Path,
+	err = installZipAtomically(zipPath, info, targetName)
+	if err != nil && info.TreeRef != "" && info.TreeRefAmbiguous {
+		if resolveErr := tryResolveAmbiguousTreeRef(info, targetName); resolveErr == nil {
+			return nil
 		}
+		return fmt.Errorf("%w (if your branch contains '/', URL-encode it, e.g. feature%%2Ffoo)", err)
+	}
+	return err
+}
 
-		for _, altPath := range alternativePaths {
-			infoCopy := *info
-			infoCopy.Path = altPath
-			os.RemoveAll(targetDir) // Clean up failed attempt
-			if err = extractZip(zipPath, targetDir, &infoCopy); err == nil {
-				return nil
-			}
-		}
+// installZipAtomically extracts a downloaded zip into a staging directory under
+// the skills root, validates it, then swaps it into targetName. On any failure
+// before the swap, an existing skill at targetName is left untouched.
+func installZipAtomically(zipPath string, info *RepoInfo, targetName string) error {
+	if err := config.EnsureSkillsDir(); err != nil {
+		return fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
+	skillsDir := config.GetSkillsDir()
+	finalDir := filepath.Join(skillsDir, targetName)
+
+	stagingDir, err := os.MkdirTemp(skillsDir, "."+targetName+".staging-")
 	if err != nil {
-		if info.TreeRef != "" && info.TreeRefAmbiguous {
-			if resolveErr := tryResolveAmbiguousTreeRef(info, targetName); resolveErr == nil {
-				return nil
-			}
-			return fmt.Errorf("failed to extract: %w (if your branch contains '/', URL-encode it, e.g. feature%%2Ffoo)", err)
+		return fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	swapped := false
+	defer func() {
+		if !swapped {
+			_ = os.RemoveAll(stagingDir)
 		}
+	}()
+
+	if err := extractZipWithFallbacks(zipPath, stagingDir, info); err != nil {
 		return fmt.Errorf("failed to extract: %w", err)
 	}
+	if err := replaceSkillDir(finalDir, stagingDir); err != nil {
+		return err
+	}
+	swapped = true
+	return nil
+}
 
+// extractZipWithFallbacks extracts into stagingDir, trying common alternate
+// skill paths when the primary path does not contain a valid skill.
+func extractZipWithFallbacks(zipPath, stagingDir string, info *RepoInfo) error {
+	err := extractZip(zipPath, stagingDir, info)
+	if err == nil || info.Path == "" {
+		return err
+	}
+
+	// If path doesn't work, try common skill locations
+	// e.g., "docx" -> "skills/docx" for anthropics/skills repo
+	alternativePaths := []string{
+		"skills/" + info.Path,
+		"skill/" + info.Path,
+	}
+
+	for _, altPath := range alternativePaths {
+		infoCopy := *info
+		infoCopy.Path = altPath
+		_ = os.RemoveAll(stagingDir)
+		if err = extractZip(zipPath, stagingDir, &infoCopy); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// replaceSkillDir swaps a validated staging directory into the final skill
+// path. The previous install is removed only at this point.
+func replaceSkillDir(finalDir, stagingDir string) error {
+	if err := os.RemoveAll(finalDir); err != nil {
+		return fmt.Errorf("failed to replace existing skill: %w", err)
+	}
+	if err := os.Rename(stagingDir, finalDir); err != nil {
+		return fmt.Errorf("failed to install staged skill: %w", err)
+	}
 	return nil
 }
 
@@ -259,23 +306,18 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string) error {
 		infoCopy.Branch = branch
 		infoCopy.Path = path
 
-		if err := downloadAndExtractWithBranch(&infoCopy, targetName); err == nil {
+		zipPath, err := downloadToTempFile(archiveURL(&infoCopy))
+		if err != nil {
+			continue
+		}
+		err = installZipAtomically(zipPath, &infoCopy, targetName)
+		_ = os.Remove(zipPath)
+		if err == nil {
 			return nil
 		}
 	}
 
 	return fmt.Errorf("unable to resolve tree ref")
-}
-
-func downloadAndExtractWithBranch(info *RepoInfo, targetName string) error {
-	zipPath, err := downloadToTempFile(archiveURL(info))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(zipPath) }()
-
-	targetDir := filepath.Join(config.GetSkillsDir(), targetName)
-	return extractZip(zipPath, targetDir, info)
 }
 
 // extractZip extracts the zip file to target directory

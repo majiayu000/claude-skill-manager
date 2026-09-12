@@ -61,6 +61,11 @@ Supported formats:
 			skillName = github.GetSkillName(info)
 		}
 
+		if err := skill.ValidateSkillName(skillName); err != nil {
+			fmt.Println(styles.RenderError(err.Error()))
+			os.Exit(1)
+		}
+
 		// Resolve once: Exists/Get scan and parse every installed SKILL.md.
 		// Prefer the matched directory path so --force replaces an aliased
 		// install (dir basename != front-matter name) instead of creating a duplicate.

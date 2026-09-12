@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFetchRegistryFollowsManifestShards(t *testing.T) {
@@ -277,6 +278,91 @@ func TestFetchRegistryWithSourceUsesValidCacheBeforeRemote(t *testing.T) {
 	}
 }
 
+func TestFetchRegistryWithSourceFallsBackToExpiredCacheOnRemoteFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/registry.json", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "registry unavailable", http.StatusInternalServerError)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	writeConfigForRegistryTest(t, server.URL)
+
+	path := configRegistryCachePathForTest(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":"stale","total_count":1,"skills":[{"name":"stale-skill","install":"owner/repo/.claude/skills/stale/SKILL.md","branch":"main"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(path, expired, expired); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadRegistryCache(); err == nil {
+		t.Fatal("expected expired cache to be rejected on the happy path")
+	}
+
+	registry, source, err := FetchRegistryWithSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != RegistrySourceCache {
+		t.Fatalf("expected cache source on remote failure, got %s", source)
+	}
+	if registry.Version != "stale" || len(registry.Skills) != 1 {
+		t.Fatalf("unexpected stale registry: %#v", registry)
+	}
+	if got := registry.Skills[0].Name; got != "stale-skill" {
+		t.Fatalf("unexpected stale skill: %s", got)
+	}
+}
+
+func TestFetchSearchIndexFallsBackToExpiredCacheOnRemoteFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/docs/search-index.json", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "search index unavailable", http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/docs/search-index.json.gz", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "search index unavailable", http.StatusInternalServerError)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	writeConfigForRegistryTest(t, server.URL)
+
+	path := configSearchIndexCachePathForTest(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"v":"stale","t":1,"s":[{"n":"stale-search","d":"cached","c":"tst","g":[],"r":1,"i":"owner/repo/.agents/skills/stale-search/SKILL.md","b":"main"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(path, expired, expired); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadSearchIndexCache(); err == nil {
+		t.Fatal("expected expired search cache to be rejected on the happy path")
+	}
+
+	idx, source, err := FetchSearchIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != RegistrySourceCache {
+		t.Fatalf("expected cache source on remote failure, got %s", source)
+	}
+	if idx.Version != "stale" || len(idx.Skills) != 1 {
+		t.Fatalf("unexpected stale search index: %#v", idx)
+	}
+	if got := idx.Skills[0].Name; got != "stale-search" {
+		t.Fatalf("unexpected stale search skill: %s", got)
+	}
+}
+
 func TestFetchSearchIndexFollowsManifestShards(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/search-index.json", func(w http.ResponseWriter, r *http.Request) {
@@ -448,6 +534,15 @@ func configRegistryCachePathForTest(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return filepath.Join(cacheDir, "sk", "registry.json")
+}
+
+func configSearchIndexCachePathForTest(t *testing.T) string {
+	t.Helper()
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(cacheDir, "sk", "search-index.json")
 }
 
 func writeConfigForRegistryTest(t *testing.T, registryURL string) {

@@ -206,7 +206,8 @@ func FetchRegistryWithSource() (*Registry, RegistrySource, error) {
 
 	registry, err := fetchRegistryFromBaseURL(registryBaseURL())
 	if err != nil {
-		if cached, cacheErr := loadRegistryCache(); cacheErr == nil {
+		// Prefer expired-but-valid cache over a hard failure when remote is down.
+		if cached, cacheErr := readRegistryCachePayload(); cacheErr == nil {
 			return cached, RegistrySourceCache, nil
 		}
 		return nil, "", fmt.Errorf("failed to fetch registry: %w", err)
@@ -327,6 +328,10 @@ func FetchSearchIndex() (*SearchIndex, RegistrySource, error) {
 
 	idx, err := fetchSearchIndexFromBaseURL(docsBaseURL())
 	if err != nil {
+		// Prefer expired-but-valid cache over a hard failure when remote is down.
+		if cached, cacheErr := readSearchIndexCachePayload(); cacheErr == nil {
+			return cached, RegistrySourceCache, nil
+		}
 		return nil, "", err
 	}
 
@@ -535,17 +540,15 @@ func resolveInstallFromIndex(idx *SearchIndex, name string) (string, error) {
 	return "", fmt.Errorf("no skill named %q in registry", name)
 }
 
-func loadRegistryCache() (*Registry, error) {
-	path := config.RegistryCachePath()
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
+func cacheExpired(modTime time.Time) bool {
 	ttl := time.Duration(config.GetRegistryTTL()) * time.Hour
-	if time.Since(info.ModTime()) > ttl {
-		return nil, fmt.Errorf("registry cache expired")
-	}
+	return time.Since(modTime) > ttl
+}
 
+// readRegistryCachePayload reads and validates the on-disk registry cache
+// without applying the TTL freshness gate.
+func readRegistryCachePayload() (*Registry, error) {
+	path := config.RegistryCachePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -561,6 +564,20 @@ func loadRegistryCache() (*Registry, error) {
 
 	normalizeRegistrySkills(registry.Skills)
 	return &registry, nil
+}
+
+// loadRegistryCache returns a fresh (within TTL) registry cache entry.
+// Expired caches are rejected so the happy path still refreshes from remote.
+func loadRegistryCache() (*Registry, error) {
+	path := config.RegistryCachePath()
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if cacheExpired(info.ModTime()) {
+		return nil, fmt.Errorf("registry cache expired")
+	}
+	return readRegistryCachePayload()
 }
 
 func saveRegistryCache(registry *Registry) error {
@@ -585,17 +602,10 @@ func searchIndexCachePath() string {
 	return config.SearchIndexCachePath()
 }
 
-func loadSearchIndexCache() (*SearchIndex, error) {
+// readSearchIndexCachePayload reads and validates the on-disk search index
+// cache without applying the TTL freshness gate.
+func readSearchIndexCachePayload() (*SearchIndex, error) {
 	path := searchIndexCachePath()
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	ttl := time.Duration(config.GetRegistryTTL()) * time.Hour
-	if time.Since(info.ModTime()) > ttl {
-		return nil, fmt.Errorf("search index cache expired")
-	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -610,6 +620,20 @@ func loadSearchIndexCache() (*SearchIndex, error) {
 	}
 
 	return &idx, nil
+}
+
+// loadSearchIndexCache returns a fresh (within TTL) search index cache entry.
+// Expired caches are rejected so the happy path still refreshes from remote.
+func loadSearchIndexCache() (*SearchIndex, error) {
+	path := searchIndexCachePath()
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if cacheExpired(info.ModTime()) {
+		return nil, fmt.Errorf("search index cache expired")
+	}
+	return readSearchIndexCachePayload()
 }
 
 func saveSearchIndexCache(idx *SearchIndex) error {

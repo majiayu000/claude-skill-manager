@@ -290,16 +290,7 @@ func resolveFinalSkillDir(skillsDir, targetName, overrideFinalDir string) (strin
 }
 
 func validateSkillName(name string) error {
-	if name == "" || name == "." || name == ".." {
-		return fmt.Errorf("invalid skill name %q", name)
-	}
-	if strings.ContainsAny(name, `/\`) || filepath.IsAbs(name) {
-		return fmt.Errorf("invalid skill name %q: must be a single path component", name)
-	}
-	if filepath.Base(name) != name || filepath.Clean(name) != name {
-		return fmt.Errorf("invalid skill name %q: must be a single path component", name)
-	}
-	return nil
+	return skill.ValidateSkillName(name)
 }
 
 // isStrictlyWithinDir reports whether target is a path strictly contained under

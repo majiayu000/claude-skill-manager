@@ -349,7 +349,7 @@ func TestValidateSkillName(t *testing.T) {
 	if err := validateSkillName("docx"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"", ".", "..", "a/b", `a\b`} {
+	for _, name := range []string{"", ".", "..", "a/b", `a\b`, "victim.", "victim ", ". "} {
 		if err := validateSkillName(name); err == nil {
 			t.Fatalf("expected %q to be invalid", name)
 		}

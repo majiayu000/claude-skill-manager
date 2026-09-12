@@ -294,7 +294,62 @@ func recoverOrphanedInstallerDirs(skillsDir string) {
 	}
 }
 
-// GetSkillDir returns the full path for a skill
+// ValidateSkillName rejects names that are empty, ".", "..", contain path
+// separators, or do not Clean to a single base path segment. Embedded ".."
+// inside one segment (e.g. "foo..bar") is allowed: it has no traversal
+// semantics once separators and exact "."/".." are blocked. This blocks
+// Join-cleaning aliases that would make filepath.Join(skillsDir, name) equal
+// the skills root (SEC-08) or escape it (SEC-07).
+//
+// Also reject any name that Win32 trailing-space/period trimming would change
+// (e.g. ". ", ".. ", "victim.", "victim "). Ordinary Win32 path handling
+// strips those characters, so a lexical child can still resolve to the skills
+// root or to a different installed skill directory.
+func ValidateSkillName(name string) error {
+	if name == "" {
+		return fmt.Errorf("invalid skill name: must not be empty")
+	}
+	if filepath.IsAbs(name) {
+		return fmt.Errorf("invalid skill name %q: must not be an absolute path", name)
+	}
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\') {
+		return fmt.Errorf("invalid skill name %q: must not contain path separators", name)
+	}
+	if isPathReferenceName(name) {
+		return fmt.Errorf("invalid skill name %q: must not be a path reference", name)
+	}
+	cleaned := filepath.Clean(name)
+	if cleaned != name {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	// Require a single base segment after Clean (not ".", "..", or nested).
+	if cleaned == "." || cleaned == ".." || filepath.Base(cleaned) != cleaned {
+		return fmt.Errorf("invalid skill name %q: must be a single path segment", name)
+	}
+	return nil
+}
+
+// isPathReferenceName reports whether name is "." / ".." or a Win32 alias that
+// ordinary path handling would rewrite by stripping trailing spaces and
+// periods from the final segment. Any change under that trim is unsafe: ". "
+// / ".." collapse to path references, while "victim." / "victim " collapse to
+// an existing "victim" skill directory.
+func isPathReferenceName(name string) bool {
+	if name == "." || name == ".." {
+		return true
+	}
+	// Strip the same trailing " ." class Win32 removes from a final segment.
+	// Reject whenever that changes the name — not only when the result is
+	// empty / "." / "..".
+	return strings.TrimRight(name, ". ") != name
+}
+
+// GetSkillDir returns the full path for a skill. Invalid names refuse to
+// leave the skills root (callers should validate earlier for clear errors).
 func GetSkillDir(name string) string {
-	return filepath.Join(config.GetSkillsDir(), name)
+	skillsDir := config.GetSkillsDir()
+	if err := ValidateSkillName(name); err != nil {
+		return skillsDir
+	}
+	return filepath.Join(skillsDir, name)
 }

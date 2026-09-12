@@ -175,9 +175,10 @@ func trimDelimiter(line string) string {
 // Join-cleaning aliases that would make filepath.Join(skillsDir, name) equal
 // the skills root (SEC-08) or escape it (SEC-07).
 //
-// Also reject Win32 aliases of "." / ".." that keep trailing spaces or periods
-// (e.g. ". ", ".. "). Ordinary Win32 path handling strips those characters, so
-// a validated lexical child like skills\.  can still resolve to the skills root.
+// Also reject any name that Win32 trailing-space/period trimming would change
+// (e.g. ". ", ".. ", "victim.", "victim "). Ordinary Win32 path handling
+// strips those characters, so a lexical child can still resolve to the skills
+// root or to a different installed skill directory.
 func ValidateSkillName(name string) error {
 	if name == "" {
 		return fmt.Errorf("invalid skill name: must not be empty")
@@ -203,21 +204,18 @@ func ValidateSkillName(name string) error {
 }
 
 // isPathReferenceName reports whether name is "." / ".." or a Win32 alias that
-// ordinary path handling collapses to those components by stripping trailing
-// spaces and periods from the final segment.
+// ordinary path handling would rewrite by stripping trailing spaces and
+// periods from the final segment. Any change under that trim is unsafe: ". "
+// / ".." collapse to path references, while "victim." / "victim " collapse to
+// an existing "victim" skill directory.
 func isPathReferenceName(name string) bool {
 	if name == "." || name == ".." {
 		return true
 	}
-	// Preserve exact "."/".." above; for every other spelling, strip the same
-	// trailing " ." class Win32 removes. Empty / "." / ".." after that means
-	// the name was only dots/spaces (". ", ".. ", "...", etc.).
-	switch strings.TrimRight(name, ". ") {
-	case "", ".", "..":
-		return true
-	default:
-		return false
-	}
+	// Strip the same trailing " ." class Win32 removes from a final segment.
+	// Reject whenever that changes the name — not only when the result is
+	// empty / "." / "..".
+	return strings.TrimRight(name, ". ") != name
 }
 
 // GetSkillDir returns the full path for a skill. Invalid names refuse to

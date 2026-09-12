@@ -142,12 +142,15 @@ func TestValidateSkillNameRejectsPathEscape(t *testing.T) {
 		"../outside",
 		"..",
 		".",
-		". ",  // Win32 strips trailing space → "."
-		".. ", // Win32 strips trailing space → ".."
-		"...", // Win32 strips trailing periods → empty / current-dir alias
+		". ",      // Win32 strips trailing space → "."
+		".. ",     // Win32 strips trailing space → ".."
+		"...",     // Win32 strips trailing periods → empty / current-dir alias
 		". .",
 		".. .",
 		" .",
+		"victim.",  // Win32 strips trailing period → existing "victim" skill
+		"victim ",  // Win32 strips trailing space → existing "victim" skill
+		"victim. ", // Win32 strips trailing period+space → "victim"
 		"nested/name",
 		`nested\name`,
 		"foo/../bar",

@@ -83,12 +83,14 @@ func TestListSkipsStagingDirectories(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	skillsDir := filepath.Join(home, ".claude", "skills")
-	staging := filepath.Join(skillsDir, ".docx.staging-abc123")
-	if err := os.MkdirAll(staging, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(staging, "SKILL.md"), []byte("---\nname: docx\n---\n"), 0644); err != nil {
-		t.Fatal(err)
+	for _, tempName := range []string{".docx.staging-abc123", ".docx.backup-xyz"} {
+		tempDir := filepath.Join(skillsDir, tempName)
+		if err := os.MkdirAll(tempDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tempDir, "SKILL.md"), []byte("---\nname: docx\n---\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	real := filepath.Join(skillsDir, "docx")
 	if err := os.MkdirAll(real, 0755); err != nil {
@@ -108,8 +110,29 @@ func TestListSkipsStagingDirectories(t *testing.T) {
 	if filepath.Base(skills[0].Path) != "docx" {
 		t.Fatalf("unexpected skill path: %s", skills[0].Path)
 	}
-	if Exists(".docx.staging-abc123") {
-		t.Fatal("staging directory must not match Exists")
+	if Exists(".docx.staging-abc123") || Exists(".docx.backup-xyz") {
+		t.Fatal("installer temp directories must not match Exists")
+	}
+}
+
+func TestListDiscoversLeadingDotSkillNames(t *testing.T) {
+	installSkill(t, ".foo", "---\nname: foo\ndescription: dotted install\n---\n")
+
+	skills, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected dotted skill to be listed, got %#v", skills)
+	}
+	if filepath.Base(skills[0].Path) != ".foo" {
+		t.Fatalf("unexpected skill path: %s", skills[0].Path)
+	}
+	if !Exists(".foo") {
+		t.Fatal("expected Exists to find --name .foo install by directory")
+	}
+	if !Exists("foo") {
+		t.Fatal("expected Exists to find --name .foo install by front-matter name")
 	}
 }
 

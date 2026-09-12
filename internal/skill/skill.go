@@ -44,10 +44,10 @@ func List() ([]Skill, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		// Skip hidden / staging directories (e.g. ".docx.staging-XXXX").
-		// Install stages under the skills root; leftovers must not appear as
-		// installed skills if a process exits before cleanup.
-		if strings.HasPrefix(entry.Name(), ".") {
+		// Skip installer-owned temp dirs (e.g. ".docx.staging-XXXX",
+		// ".docx.backup-XXXX"). Do not skip all dotted names — custom installs
+		// like --name .foo must remain discoverable via List/Get/Exists.
+		if isInstallerTempDir(entry.Name()) {
 			continue
 		}
 
@@ -172,6 +172,13 @@ func extractFrontMatter(text string) (string, bool) {
 
 func trimDelimiter(line string) string {
 	return strings.TrimRight(line, " \t\r")
+}
+
+// isInstallerTempDir reports whether name matches install staging/backup
+// directories created under the skills root (MkdirTemp prefixes
+// ".<base>.staging-" / ".<base>.backup-").
+func isInstallerTempDir(name string) bool {
+	return strings.Contains(name, ".staging-") || strings.Contains(name, ".backup-")
 }
 
 // GetSkillDir returns the full path for a skill

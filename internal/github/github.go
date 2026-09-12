@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/majiayu000/claude-skill-manager/internal/config"
+	"github.com/majiayu000/claude-skill-manager/internal/skill"
 )
 
 // downloadClient is used for repository archive downloads. Archives can be
@@ -237,6 +238,7 @@ func installZipAtomically(zipPath string, info *RepoInfo, targetName string, opt
 	}
 
 	skillsDir := config.GetSkillsDir()
+	skill.RecoverOrphanedInstallerDirs(skillsDir)
 	finalDir, err := resolveFinalSkillDir(skillsDir, targetName, opts.FinalDir)
 	if err != nil {
 		return "", err

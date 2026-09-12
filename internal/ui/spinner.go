@@ -82,8 +82,10 @@ type DoneMsg struct {
 	Err    error
 }
 
-// RunWithSpinner runs a function with a spinner
-func RunWithSpinner(message string, fn func() (string, error)) error {
+// RunWithSpinner runs a function with a spinner and returns its result.
+// The worker always finishes before this returns, so callers can safely read
+// values written by fn even if the TTY UI quit early (q / Ctrl+C).
+func RunWithSpinner(message string, fn func() (string, error)) (string, error) {
 	// Check if we're in a TTY
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		// Non-TTY mode: simple output
@@ -91,20 +93,33 @@ func RunWithSpinner(message string, fn func() (string, error)) error {
 		result, err := fn()
 		if err != nil {
 			fmt.Println(styles.RenderError(err.Error()))
-			return err
+			return "", err
 		}
 		fmt.Println(result)
-		return nil
+		return result, nil
 	}
 
 	m := NewSpinner(message)
 	p := tea.NewProgram(m)
 
+	type outcome struct {
+		result string
+		err    error
+	}
+	done := make(chan outcome, 1)
 	go func() {
 		result, err := fn()
+		done <- outcome{result: result, err: err}
 		p.Send(DoneMsg{Result: result, Err: err})
 	}()
 
-	_, err := p.Run()
-	return err
+	_, runErr := p.Run()
+	out := <-done
+	if out.err != nil {
+		return "", out.err
+	}
+	if runErr != nil {
+		return out.result, runErr
+	}
+	return out.result, nil
 }

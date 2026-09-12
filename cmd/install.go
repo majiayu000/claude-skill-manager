@@ -92,22 +92,11 @@ Supported formats:
 		fmt.Printf("  %s %s\n", styles.MutedStyle.Render("from"), info.FullURL)
 		fmt.Println()
 
-		installPath := ""
-		// Download and install with spinner
-		err = ui.RunWithSpinner("Downloading...", func() (string, error) {
-			path, err := github.DownloadAndExtract(info, skillName, opts)
-			if err != nil {
-				return "", err
-			}
-			installPath = path
-
-			// Get installed skill info
-			s, _ := skill.Get(skillName)
-			result := styles.RenderSuccess(fmt.Sprintf("Installed %s", styles.CodeStyle.Render(skillName)))
-			if s != nil && s.Description != "" {
-				result += "\n  " + styles.SkillDescStyle.Render(s.Description)
-			}
-			return result, nil
+		// Download and install with spinner. RunWithSpinner waits for the worker
+		// before returning, so the returned install path is synchronized even if
+		// the TTY UI quits early (q / Ctrl+C).
+		installPath, err := ui.RunWithSpinner("Downloading...", func() (string, error) {
+			return github.DownloadAndExtract(info, skillName, opts)
 		})
 
 		if err != nil {
@@ -117,6 +106,11 @@ Supported formats:
 
 		if installPath == "" {
 			installPath = skill.GetSkillDir(skillName)
+		}
+		s, _ := skill.Get(skillName)
+		fmt.Println(styles.RenderSuccess(fmt.Sprintf("Installed %s", styles.CodeStyle.Render(skillName))))
+		if s != nil && s.Description != "" {
+			fmt.Println("  " + styles.SkillDescStyle.Render(s.Description))
 		}
 		fmt.Println()
 		fmt.Println(styles.MutedStyle.Render("  Skill installed to: ") + installPath)

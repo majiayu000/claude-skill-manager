@@ -174,6 +174,10 @@ func trimDelimiter(line string) string {
 // semantics once separators and exact "."/".." are blocked. This blocks
 // Join-cleaning aliases that would make filepath.Join(skillsDir, name) equal
 // the skills root (SEC-08) or escape it (SEC-07).
+//
+// Also reject Win32 aliases of "." / ".." that keep trailing spaces or periods
+// (e.g. ". ", ".. "). Ordinary Win32 path handling strips those characters, so
+// a validated lexical child like skills\.  can still resolve to the skills root.
 func ValidateSkillName(name string) error {
 	if name == "" {
 		return fmt.Errorf("invalid skill name: must not be empty")
@@ -184,7 +188,7 @@ func ValidateSkillName(name string) error {
 	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\') {
 		return fmt.Errorf("invalid skill name %q: must not contain path separators", name)
 	}
-	if name == "." || name == ".." {
+	if isPathReferenceName(name) {
 		return fmt.Errorf("invalid skill name %q: must not be a path reference", name)
 	}
 	cleaned := filepath.Clean(name)
@@ -196,6 +200,24 @@ func ValidateSkillName(name string) error {
 		return fmt.Errorf("invalid skill name %q: must be a single path segment", name)
 	}
 	return nil
+}
+
+// isPathReferenceName reports whether name is "." / ".." or a Win32 alias that
+// ordinary path handling collapses to those components by stripping trailing
+// spaces and periods from the final segment.
+func isPathReferenceName(name string) bool {
+	if name == "." || name == ".." {
+		return true
+	}
+	// Preserve exact "."/".." above; for every other spelling, strip the same
+	// trailing " ." class Win32 removes. Empty / "." / ".." after that means
+	// the name was only dots/spaces (". ", ".. ", "...", etc.).
+	switch strings.TrimRight(name, ". ") {
+	case "", ".", "..":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetSkillDir returns the full path for a skill. Invalid names refuse to

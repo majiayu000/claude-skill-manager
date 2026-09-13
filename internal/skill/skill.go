@@ -87,44 +87,75 @@ func List() ([]Skill, error) {
 	return skills, nil
 }
 
-// Get returns a specific skill by name
+// Get returns a specific skill by name.
+//
+// Mutating operations (install --force, uninstall) must use the on-disk
+// directory name via Exists/Remove. Get is for read-only lookups: it prefers
+// an exact directory match, and falls back to an unambiguous front-matter
+// name match for commands like `sk info`.
 func Get(name string) (*Skill, error) {
 	skills, err := List()
 	if err != nil {
 		return nil, err
 	}
 
-	for _, s := range skills {
-		if s.Name == name || filepath.Base(s.Path) == name {
-			return &s, nil
+	var aliasMatches []Skill
+	for i := range skills {
+		s := &skills[i]
+		if filepath.Base(s.Path) == name {
+			return s, nil
 		}
+		if s.Name == name {
+			aliasMatches = append(aliasMatches, *s)
+		}
+	}
+
+	if len(aliasMatches) == 1 {
+		return &aliasMatches[0], nil
 	}
 
 	return nil, nil
 }
 
-// Exists checks if a skill is installed
+// Exists reports whether a skill directory is installed under skillsDir/name.
+// Front-matter aliases are intentionally ignored so install --force cannot
+// treat an unrelated directory as already occupying the install target.
 func Exists(name string) bool {
-	skill, _ := Get(name)
-	return skill != nil
+	dir, ok := skillDirForName(name)
+	if !ok {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "SKILL.md"))
+	return err == nil
 }
 
-// Remove uninstalls a skill
+// Remove uninstalls the skill directory at skillsDir/name.
+// It never resolves front-matter aliases; callers that accept an alias must
+// resolve it via Get and pass filepath.Base(s.Path).
 func Remove(name string) error {
-	s, err := Get(name)
-	if err != nil {
+	dir, ok := skillDirForName(name)
+	if !ok {
+		return os.ErrNotExist
+	}
+	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); os.IsNotExist(err) {
+		return os.ErrNotExist
+	} else if err != nil {
 		return err
 	}
-	if s == nil {
-		return os.ErrNotExist
-	}
 
-	// Check if exists
-	if _, err := os.Stat(s.Path); os.IsNotExist(err) {
-		return os.ErrNotExist
-	}
+	return os.RemoveAll(dir)
+}
 
-	return os.RemoveAll(s.Path)
+// skillDirForName returns skillsDir/name when name is a valid skill directory
+// identity. Invalid names (SEC-07 / SEC-08) never resolve to the skills root.
+func skillDirForName(name string) (string, bool) {
+	if err := ValidateSkillName(name); err != nil {
+		return "", false
+	}
+	if isInstallerTempDir(name) {
+		return "", false
+	}
+	return GetSkillDir(name), true
 }
 
 // parseSkillMd extracts metadata from SKILL.md front matter

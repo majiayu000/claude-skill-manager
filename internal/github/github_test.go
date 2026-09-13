@@ -284,6 +284,50 @@ func TestForceReplaceUsesAliasedInstallPath(t *testing.T) {
 	}
 }
 
+func TestForceInstallByDirectoryNameDoesNotReplaceAlias(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	aliasDir := filepath.Join(home, ".claude", "skills", "pdf-tools")
+	if err := os.MkdirAll(aliasDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	original := "---\nname: pdf\ndescription: PDF tools\n---\nold\n"
+	if err := os.WriteFile(filepath.Join(aliasDir, "SKILL.md"), []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	zipPath := writeTestZip(t, map[string]string{
+		"repo-main/pdf/SKILL.md": "---\nname: pdf\ndescription: other pdf skill\n---\nnew\n",
+	})
+	info := &RepoInfo{Owner: "owner", Repo: "repo", Branch: "main", Path: "pdf"}
+
+	// sk install <src> --name pdf --force: occupy skills/pdf only.
+	finalDir, err := installZipAtomically(zipPath, info, "pdf", ExtractOptions{AllowReplace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".claude", "skills", "pdf")
+	if finalDir != want {
+		t.Fatalf("expected install into %s, got %s", want, finalDir)
+	}
+
+	got, err := os.ReadFile(filepath.Join(aliasDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("pdf-tools must survive force install targeting pdf: %v", err)
+	}
+	if string(got) != original {
+		t.Fatalf("pdf-tools was modified:\n%s", got)
+	}
+	installed, err := os.ReadFile(filepath.Join(want, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(installed), "other pdf skill") {
+		t.Fatalf("expected new skill at skills/pdf, got %s", installed)
+	}
+}
+
 func TestRefuseUnforcedNonSkillCollision(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

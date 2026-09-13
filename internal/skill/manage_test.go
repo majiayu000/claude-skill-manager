@@ -24,11 +24,11 @@ func installSkill(t *testing.T, dirName, skillMd string) string {
 	return skillDir
 }
 
-func TestExistsMatchesFrontMatterName(t *testing.T) {
+func TestExistsMatchesDirectoryOnly(t *testing.T) {
 	installSkill(t, "pdf-tools", "---\nname: pdf\ndescription: PDF tools\n---\n")
 
-	if !Exists("pdf") {
-		t.Fatal("expected the front-matter name to match")
+	if Exists("pdf") {
+		t.Fatal("Exists must not match front-matter aliases")
 	}
 	if !Exists("pdf-tools") {
 		t.Fatal("expected the directory name to match")
@@ -43,6 +43,51 @@ func TestExistsFalseWhenSkillsDirMissing(t *testing.T) {
 
 	if Exists("anything") {
 		t.Fatal("expected no skills when the skills directory does not exist")
+	}
+}
+
+func TestGetPrefersDirectoryAndAllowsUnambiguousAlias(t *testing.T) {
+	installSkill(t, "pdf-tools", "---\nname: pdf\ndescription: PDF tools\n---\n")
+
+	byDir, err := Get("pdf-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byDir == nil || filepath.Base(byDir.Path) != "pdf-tools" {
+		t.Fatalf("expected directory lookup, got %+v", byDir)
+	}
+
+	byAlias, err := Get("pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byAlias == nil || filepath.Base(byAlias.Path) != "pdf-tools" {
+		t.Fatalf("expected unambiguous alias lookup, got %+v", byAlias)
+	}
+}
+
+func TestGetRejectsAmbiguousFrontMatterAlias(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	for _, dir := range []string{"pdf-tools", "pdf-extra"} {
+		skillDir := filepath.Join(skillsDir, dir)
+		if err := os.MkdirAll(skillDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: pdf\ndescription: PDF tools\n---\n"
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Get("pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("expected ambiguous alias to resolve to nil, got %+v", got)
 	}
 }
 
@@ -75,6 +120,56 @@ func TestRemoveDeletesSkillDir(t *testing.T) {
 	}
 	if Exists("docx") {
 		t.Fatal("expected the skill to be uninstalled")
+	}
+}
+
+func TestRemoveByAliasDoesNotDeleteDirectory(t *testing.T) {
+	skillDir := installSkill(t, "pdf-tools", "---\nname: pdf\ndescription: PDF tools\n---\n")
+
+	if err := Remove("pdf"); !os.IsNotExist(err) {
+		t.Fatalf("expected os.ErrNotExist when removing by alias, got %v", err)
+	}
+	if _, err := os.Stat(skillDir); err != nil {
+		t.Fatalf("expected pdf-tools to remain, stat err = %v", err)
+	}
+	if !Exists("pdf-tools") {
+		t.Fatal("expected pdf-tools to still be installed")
+	}
+}
+
+func TestForceReinstallTargetDoesNotTouchAliasDirectory(t *testing.T) {
+	aliasDir := installSkill(t, "pdf-tools", "---\nname: pdf\ndescription: PDF tools\n---\n")
+
+	// Simulates: sk install <src> --name pdf --force when only pdf-tools exists.
+	if Exists("pdf") {
+		t.Fatal("destination pdf must not be considered installed via alias")
+	}
+	if err := Remove("pdf"); !os.IsNotExist(err) {
+		t.Fatalf("force remove of pdf must be a no-op miss, got %v", err)
+	}
+	if _, err := os.Stat(aliasDir); err != nil {
+		t.Fatalf("pdf-tools must survive force reinstall targeting pdf: %v", err)
+	}
+
+	// Occupying the real destination still works.
+	destDir := filepath.Join(filepath.Dir(aliasDir), "pdf")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "SKILL.md"), []byte("---\nname: pdf\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !Exists("pdf") {
+		t.Fatal("expected directory pdf to be installed")
+	}
+	if err := Remove("pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(destDir); !os.IsNotExist(err) {
+		t.Fatalf("expected pdf destination removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(aliasDir); err != nil {
+		t.Fatalf("pdf-tools must still exist after removing pdf: %v", err)
 	}
 }
 
@@ -131,8 +226,15 @@ func TestListDiscoversLeadingDotSkillNames(t *testing.T) {
 	if !Exists(".foo") {
 		t.Fatal("expected Exists to find --name .foo install by directory")
 	}
-	if !Exists("foo") {
-		t.Fatal("expected Exists to find --name .foo install by front-matter name")
+	if Exists("foo") {
+		t.Fatal("Exists must not match the front-matter alias of --name .foo")
+	}
+	got, err := Get("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || filepath.Base(got.Path) != ".foo" {
+		t.Fatalf("expected Get alias lookup for .foo, got %+v", got)
 	}
 }
 
@@ -199,5 +301,18 @@ func TestRemoveMissingSkill(t *testing.T) {
 
 	if err := Remove("absent"); !os.IsNotExist(err) {
 		t.Fatalf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestRemoveRejectsUnsafeNames(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	for _, name := range []string{"", ".", "..", "../etc", "a/b", `a\b`} {
+		if err := Remove(name); !os.IsNotExist(err) {
+			t.Fatalf("Remove(%q): expected os.ErrNotExist, got %v", name, err)
+		}
+		if Exists(name) {
+			t.Fatalf("Exists(%q) should be false", name)
+		}
 	}
 }

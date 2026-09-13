@@ -66,15 +66,9 @@ Supported formats:
 			os.Exit(1)
 		}
 
-		// Resolve once: Exists/Get scan and parse every installed SKILL.md.
-		// Prefer the matched directory path so --force replaces an aliased
-		// install (dir basename != front-matter name) instead of creating a duplicate.
-		existing, existingErr := skill.Get(skillName)
-		if existingErr != nil {
-			fmt.Println(styles.RenderError("Failed to check installed skills: " + existingErr.Error()))
-			os.Exit(1)
-		}
-		alreadyInstalled := existing != nil
+		// Occupancy is the install destination directory only (skillsDir/skillName).
+		// Front-matter aliases must not block install or be replaced by --force.
+		alreadyInstalled := skill.Exists(skillName)
 
 		if alreadyInstalled && !installForce {
 			fmt.Println(styles.RenderWarning(fmt.Sprintf("Skill '%s' is already installed.", skillName)))
@@ -84,7 +78,6 @@ Supported formats:
 
 		opts := github.ExtractOptions{}
 		if alreadyInstalled && installForce {
-			opts.FinalDir = existing.Path
 			opts.AllowReplace = true
 		}
 

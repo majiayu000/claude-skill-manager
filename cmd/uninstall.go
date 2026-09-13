@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/charmbracelet/huh"
 	"github.com/majiayu000/claude-skill-manager/internal/skill"
@@ -51,8 +52,9 @@ var uninstallCmd = &cobra.Command{
 			}
 		}
 
-		// Remove
-		if err := skill.Remove(name); err != nil {
+		// Remove by on-disk directory identity (not the display/front-matter name).
+		dirName := filepath.Base(s.Path)
+		if err := skill.Remove(dirName); err != nil {
 			fmt.Println(styles.RenderError("Failed to remove skill: " + err.Error()))
 			os.Exit(1)
 		}

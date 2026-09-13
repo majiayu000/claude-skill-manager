@@ -187,9 +187,8 @@ func normalizeSkillPath(info *RepoInfo) {
 }
 
 // ExtractOptions controls where a downloaded skill is installed and whether an
-// existing path may be replaced. FinalDir, when set, must already be an
-// identified skill directory being force-reinstalled (for example an aliased
-// install whose directory basename differs from the front-matter name).
+// existing path may be replaced. FinalDir, when set, overrides the default
+// skillsDir/targetName destination and must already be a skill subdirectory.
 type ExtractOptions struct {
 	FinalDir     string
 	AllowReplace bool

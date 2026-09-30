@@ -33,8 +33,12 @@ func (e *httpStatusError) Error() string {
 }
 
 func archiveURL(info *RepoInfo) string {
-	return fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.zip",
-		info.Owner, info.Repo, info.Branch)
+	return (&url.URL{
+		Scheme: "https",
+		Host:   "github.com",
+		Path: fmt.Sprintf("/%s/%s/archive/refs/heads/%s.zip",
+			info.Owner, info.Repo, info.Branch),
+	}).String()
 }
 
 // downloadToTempFile fetches url into a temp file and returns its path.

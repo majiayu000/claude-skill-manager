@@ -105,6 +105,52 @@ func TestDownloadAndExtractHonorsEncodedBranch(t *testing.T) {
 	}
 }
 
+func TestDownloadAndExtractEscapesBranchCharacters(t *testing.T) {
+	for _, tc := range []struct{ ref, branch string }{
+		{"feature%252Ffoo", "feature%2Ffoo"},
+		{"feature%23foo", "feature#foo"},
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			selected := "selected branch\n"
+			zipPath := writeTestZip(t, map[string]string{
+				"repo-selected/":         "",
+				"repo-selected/SKILL.md": selected,
+			})
+			body, err := os.ReadFile(zipPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var requests []string
+			restore := downloadClient
+			downloadClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests = append(requests, r.URL.Path)
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+			})}
+			t.Cleanup(func() { downloadClient = restore })
+			info, err := ParseGitHubURL("https://github.com/owner/repo/tree/" + tc.ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			finalDir, err := DownloadAndExtract(info, GetSkillName(info), ExtractOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			installed, err := os.ReadFile(filepath.Join(finalDir, "SKILL.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(installed) != selected {
+				t.Fatalf("unexpected installed skill: %q", installed)
+			}
+			wantPath := "/owner/repo/archive/refs/heads/" + tc.branch + ".zip"
+			if len(requests) != 1 || requests[0] != wantPath {
+				t.Fatalf("archive request changed the branch: %v, want %q", requests, wantPath)
+			}
+		})
+	}
+}
+
 func TestParseGitHubURLTrimsDirectorySkillFile(t *testing.T) {
 	info, err := ParseGitHubURL("langgenius/dify/.agents/skills/frontend-testing/SKILL.md")
 	if err != nil {

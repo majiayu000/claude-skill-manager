@@ -34,6 +34,11 @@
 ```bash
 # Using Go
 go install github.com/majiayu000/claude-skill-manager@latest
+# Go names the executable claude-skill-manager; expose the documented sk command.
+sk_bin_dir="$(go env GOBIN)"
+if [ -z "$sk_bin_dir" ]; then sk_bin_dir="$(go env GOPATH)/bin"; fi
+mv "$sk_bin_dir/claude-skill-manager" "$sk_bin_dir/sk"
+# Ensure sk_bin_dir is on your PATH.
 
 # Or download a binary archive from the latest GitHub release.
 ```

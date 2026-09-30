@@ -23,9 +23,10 @@ import (
 var downloadClient = &http.Client{Timeout: 120 * time.Second}
 
 // httpStatusError reports a non-200 response, so callers can distinguish a
-// missing branch (worth retrying as "master") from a transport failure.
+// missing branch from other HTTP errors and transport failures.
 type httpStatusError struct {
-	status string
+	status     string
+	statusCode int
 }
 
 func (e *httpStatusError) Error() string {
@@ -47,7 +48,7 @@ func downloadToTempFile(url string) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", &httpStatusError{status: resp.Status}
+		return "", &httpStatusError{status: resp.Status, statusCode: resp.StatusCode}
 	}
 
 	tmpFile, err := os.CreateTemp("", "sk-*.zip")
@@ -207,11 +208,15 @@ func DownloadAndExtract(info *RepoInfo, targetName string, opts ExtractOptions) 
 	// Download as zip
 	zipPath, err := downloadToTempFile(archiveURL(info))
 
-	// Try 'master' branch if 'main' is missing
+	// Try 'master' only if the implicit default 'main' branch is missing.
 	var statusErr *httpStatusError
-	if errors.As(err, &statusErr) && info.Branch == "main" {
-		info.Branch = "master"
-		zipPath, err = downloadToTempFile(archiveURL(info))
+	if errors.As(err, &statusErr) && statusErr.statusCode == http.StatusNotFound && info.Branch == "main" && info.TreeRef == "" {
+		fallbackInfo := *info
+		fallbackInfo.Branch = "master"
+		if fallbackZip, fallbackErr := downloadToTempFile(archiveURL(&fallbackInfo)); fallbackErr == nil {
+			zipPath, err = fallbackZip, nil
+			info.Branch = fallbackInfo.Branch
+		}
 	}
 	if err != nil {
 		return "", err

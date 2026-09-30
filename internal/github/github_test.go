@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,145 @@ func TestDownloadToTempFileWritesBody(t *testing.T) {
 	}
 	if string(data) != "zip-bytes" {
 		t.Fatalf("unexpected body: %q", data)
+	}
+}
+
+type fallbackRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f fallbackRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestDownloadAndExtractDefaultBranchFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		input         string
+		mainStatus    int
+		masterStatus  int
+		transportFail string
+		wantFallback  bool
+		wantSuccess   bool
+	}{
+		{name: "main succeeds", input: "owner/repo", mainStatus: 200, wantSuccess: true},
+		{name: "forbidden", input: "owner/repo", mainStatus: 403, masterStatus: 200},
+		{name: "rate limited", input: "owner/repo", mainStatus: 429, masterStatus: 200},
+		{name: "server error", input: "owner/repo", mainStatus: 500, masterStatus: 200},
+		{name: "main transport failure", input: "owner/repo", transportFail: "main"},
+		{name: "explicit main", input: "https://github.com/owner/repo/tree/main", mainStatus: 404, masterStatus: 200},
+		{name: "explicit main path", input: "https://github.com/owner/repo/tree/main/skills/docx/SKILL.md", mainStatus: 404, masterStatus: 200},
+		{name: "implicit short repo", input: "owner/repo", mainStatus: 404, masterStatus: 200, wantFallback: true, wantSuccess: true},
+		{name: "implicit full repo", input: "https://github.com/owner/repo", mainStatus: 404, masterStatus: 200, wantFallback: true, wantSuccess: true},
+		{name: "implicit path", input: "owner/repo/skills/docx/SKILL.md", mainStatus: 404, masterStatus: 200, wantFallback: true, wantSuccess: true},
+		{name: "master missing", input: "owner/repo", mainStatus: 404, masterStatus: 404, wantFallback: true},
+		{name: "master forbidden", input: "owner/repo", mainStatus: 404, masterStatus: 403, wantFallback: true},
+		{name: "master server error", input: "owner/repo", mainStatus: 404, masterStatus: 500, wantFallback: true},
+		{name: "master transport failure", input: "owner/repo", mainStatus: 404, transportFail: "master", wantFallback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			installed := filepath.Join(home, ".claude", "skills", "docx")
+			if err := os.MkdirAll(installed, 0755); err != nil {
+				t.Fatal(err)
+			}
+			original := "---\nname: docx\n---\noriginal install\n"
+			if err := os.WriteFile(filepath.Join(installed, "SKILL.md"), []byte(original), 0644); err != nil {
+				t.Fatal(err)
+			}
+			archives := make(map[string][]byte)
+			for _, branch := range []string{"main", "master"} {
+				root := "repo-" + branch + "/"
+				body, err := os.ReadFile(writeTestZip(t, map[string]string{
+					root:                          "",
+					root + "SKILL.md":             branch + " skill\n",
+					root + "skills/docx/SKILL.md": branch + " skill\n",
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				archives[branch] = body
+			}
+			var requests []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				branch, status := "main", tc.mainStatus
+				if r.URL.Path == "/owner/repo/archive/refs/heads/master.zip" {
+					branch, status = "master", tc.masterStatus
+				} else if r.URL.Path != "/owner/repo/archive/refs/heads/main.zip" {
+					t.Errorf("unexpected archive request: %s", r.URL)
+					http.NotFound(w, r)
+					return
+				}
+				w.WriteHeader(status)
+				if status == http.StatusOK {
+					if _, err := w.Write(archives[branch]); err != nil {
+						t.Error(err)
+					}
+				}
+			}))
+			defer srv.Close()
+			serverURL, err := url.Parse(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := ParseGitHubURL(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restore := downloadClient
+			transportErr := errors.New("connection interrupted")
+			downloadClient = &http.Client{Transport: fallbackRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests = append(requests, r.URL.Path)
+				if info.Branch != "main" {
+					t.Errorf("branch changed before download succeeded: %s", info.Branch)
+				}
+				if tc.transportFail != "" && strings.HasSuffix(r.URL.Path, "/"+tc.transportFail+".zip") {
+					return nil, transportErr
+				}
+				req := r.Clone(r.Context())
+				req.URL.Scheme, req.URL.Host = serverURL.Scheme, serverURL.Host
+				return srv.Client().Transport.RoundTrip(req)
+			})}
+			t.Cleanup(func() { downloadClient = restore })
+			finalDir, err := DownloadAndExtract(info, "docx", ExtractOptions{AllowReplace: true})
+			wantBranch, wantBody := "main", original
+			if tc.wantSuccess {
+				if err != nil || finalDir != installed {
+					t.Errorf("expected successful install at %s, got %q, %v", installed, finalDir, err)
+				}
+				if tc.wantFallback {
+					wantBranch = "master"
+				}
+				wantBody = wantBranch + " skill\n"
+			} else {
+				if err == nil || finalDir != "" {
+					t.Errorf("expected failed install, got %q, %v", finalDir, err)
+				}
+				if tc.transportFail == "main" {
+					if !errors.Is(err, transportErr) {
+						t.Errorf("expected original transport error, got %v", err)
+					}
+				} else {
+					var statusErr *httpStatusError
+					wantStatus := http.StatusText(tc.mainStatus)
+					if !errors.As(err, &statusErr) || !strings.HasSuffix(statusErr.status, " "+wantStatus) {
+						t.Errorf("expected original main status %d %s, got %v", tc.mainStatus, wantStatus, err)
+					}
+				}
+			}
+			if info.Branch != wantBranch {
+				t.Errorf("branch = %q, want %q", info.Branch, wantBranch)
+			}
+			gotRequests := strings.Join(requests, ",")
+			wantRequests := "/owner/repo/archive/refs/heads/main.zip"
+			if tc.wantFallback {
+				wantRequests += ",/owner/repo/archive/refs/heads/master.zip"
+			}
+			if gotRequests != wantRequests {
+				t.Errorf("HTTP requests = %q, want %q", gotRequests, wantRequests)
+			}
+			body, readErr := os.ReadFile(filepath.Join(installed, "SKILL.md"))
+			if readErr != nil || string(body) != wantBody {
+				t.Errorf("installed skill = %q, want %q; error %v", body, wantBody, readErr)
+			}
+		})
 	}
 }
 

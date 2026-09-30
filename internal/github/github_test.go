@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majiayu000/claude-skill-manager/internal/skill"
 )
 
 func TestParseGitHubURLTrimsDirectorySkillFile(t *testing.T) {
@@ -425,4 +427,36 @@ func writeTestZip(t *testing.T, files map[string]string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestInstallPreservesDottedInstallerLikeSkillNames(t *testing.T) {
+	for _, name := range []string{".docs.staging-keep", ".docs.backup-keep"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			body := "---\nname: docs\n---\nkeep\n"
+			zipPath := writeTestZip(t, map[string]string{"repo-main/docs/SKILL.md": body})
+			info := &RepoInfo{Owner: "owner", Repo: "repo", Branch: "main", Path: "docs"}
+			for _, replace := range []bool{false, true} {
+				dir, err := installZipAtomically(zipPath, info, name, ExtractOptions{AllowReplace: replace})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// A later installation also invokes orphan recovery.
+				if _, err := installZipAtomically(zipPath, info, "other", ExtractOptions{AllowReplace: replace}); err != nil {
+					t.Fatal(err)
+				}
+				skills, err := skill.List()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(skills) != 2 || !skill.Exists(name) {
+					t.Errorf("expected dotted install and sibling to remain, got %#v", skills)
+				}
+				got, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+				if err != nil || string(got) != body {
+					t.Fatalf("installed contents must remain at original path: got %q, error %v", got, err)
+				}
+			}
+		})
+	}
 }

@@ -654,3 +654,64 @@ func writeTestZip(t *testing.T, files map[string]string) string {
 	}
 	return path
 }
+
+func TestDownloadAndExtractHonorsEncodedBlobBranch(t *testing.T) {
+	for _, subpath := range []string{"", "/skills/docx", "/missing"} {
+		t.Run("root"+subpath, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			selected := "selected branch\n"
+			longZip := writeTestZip(t, map[string]string{
+				"repo-feature-foo/":                     "",
+				"repo-feature-foo/SKILL.md":             selected,
+				"repo-feature-foo/skills/docx/SKILL.md": selected,
+			})
+			shortZip := writeTestZip(t, map[string]string{
+				"repo-feature/":                         "",
+				"repo-feature/foo/SKILL.md":             "wrong branch\n",
+				"repo-feature/foo/skills/docx/SKILL.md": "wrong branch\n",
+				"repo-feature/foo/missing/SKILL.md":     "wrong branch\n",
+			})
+			var requests []string
+			restore := downloadClient
+			downloadClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests = append(requests, r.URL.Path)
+				zipPath := longZip
+				if r.URL.Path == "/owner/repo/archive/refs/heads/feature.zip" {
+					zipPath = shortZip
+				} else if r.URL.Path != "/owner/repo/archive/refs/heads/feature/foo.zip" {
+					t.Fatalf("unexpected archive request: %s", r.URL)
+				}
+				body, err := os.ReadFile(zipPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+			})}
+			t.Cleanup(func() { downloadClient = restore })
+			info, err := ParseGitHubURL("https://github.com/owner/repo/blob/feature%2Ffoo" + subpath + "/SKILL.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			finalDir, err := DownloadAndExtract(info, GetSkillName(info), ExtractOptions{})
+			if subpath == "/missing" {
+				if err == nil || finalDir != "" {
+					t.Fatalf("missing selected path must fail, got %q, %v", finalDir, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(filepath.Join(finalDir, "SKILL.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(body) != selected {
+					t.Fatalf("installed the wrong branch: %q", body)
+				}
+			}
+			if len(requests) != 1 || requests[0] != "/owner/repo/archive/refs/heads/feature/foo.zip" {
+				t.Fatalf("encoded branch must be the only archive requested: %v", requests)
+			}
+		})
+	}
+}

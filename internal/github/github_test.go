@@ -63,6 +63,95 @@ func TestDownloadClientHasTimeout(t *testing.T) {
 	}
 }
 
+func TestParseGitHubURLBlob(t *testing.T) {
+	for _, tc := range []struct {
+		input, branch, path, file, name string
+	}{
+		{"https://github.com/owner/repo/blob/main/skills/docx/SKILL.md", "main", "skills/docx", "", "docx"},
+		{"https://github.com/owner/repo/blob/develop/skills/docx/SKILL.md?plain=1#L2", "develop", "skills/docx", "", "docx"},
+		{"https://github.com/owner/repo/blob/main/.agents/project_analysis_agent_SKILL.md", "main", "", ".agents/project_analysis_agent_SKILL.md", "project_analysis_agent"},
+		{"https://github.com/owner/repo/blob/main/SKILL.md", "main", "", "", "repo"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			info, err := ParseGitHubURL(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Owner != "owner" || info.Repo != "repo" || info.Branch != tc.branch || info.Path != tc.path || info.FilePath != tc.file || GetSkillName(info) != tc.name {
+				t.Fatalf("unexpected blob target: %+v, name: %q", info, GetSkillName(info))
+			}
+		})
+	}
+}
+
+func TestParseGitHubURLRejectsUnsupportedSections(t *testing.T) {
+	for _, section := range []string{"commit/abc", "pull/1", "releases/tag/v1", "issues/1", "unknown/tree/main/skills/docx"} {
+		t.Run(section, func(t *testing.T) {
+			info, err := ParseGitHubURL("https://github.com/owner/repo/" + section)
+			if info != nil || err == nil || err.Error() != "unsupported GitHub URL section: "+strings.Split(section, "/")[0] {
+				t.Fatalf("unsupported section must return a named error, got %+v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestParseGitHubURLRejectsIncompleteBlob(t *testing.T) {
+	for _, suffix := range []string{"blob", "blob/main", "blob/main/", "blob//skills/docx/SKILL.md"} {
+		t.Run(suffix, func(t *testing.T) {
+			info, err := ParseGitHubURL("https://github.com/owner/repo/" + suffix)
+			if info != nil || err == nil {
+				t.Fatalf("incomplete blob URL must fail, got %+v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestParseGitHubURLRootAndTree(t *testing.T) {
+	for _, tc := range []struct{ input, path string }{
+		{"https://github.com/owner/repo", ""},
+		{"https://github.com/owner/repo.git", ""},
+		{"https://github.com/owner/repo/?tab=readme#readme", ""},
+		{"https://github.com/owner/repo/tree/main/skills/docx/SKILL.md", "skills/docx"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			info, err := ParseGitHubURL(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Owner != "owner" || info.Repo != "repo" || info.Branch != "main" || info.Path != tc.path {
+				t.Fatalf("unexpected repository target: %+v", info)
+			}
+		})
+	}
+}
+
+func TestInstallBlobURLSelectsNestedSkill(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	zipPath := writeTestZip(t, map[string]string{
+		"repo-main/SKILL.md":              "wrong root skill\n",
+		"repo-main/skills/docx/SKILL.md":  "selected docx skill\n",
+		"repo-main/skills/docx/helper.md": "selected helper\n",
+	})
+	info, err := ParseGitHubURL("https://github.com/owner/repo/blob/main/skills/docx/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalDir, err := installZipAtomically(zipPath, info, GetSkillName(info), ExtractOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(finalDir, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(finalDir) != "docx" || string(body) != "selected docx skill\n" {
+		t.Fatalf("blob URL installed the wrong skill: %s, %q", finalDir, body)
+	}
+	if _, err := os.Stat(filepath.Join(finalDir, "helper.md")); err != nil {
+		t.Fatalf("nested skill assets were not installed: %v", err)
+	}
+}
+
 func TestDownloadToTempFileTimesOut(t *testing.T) {
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

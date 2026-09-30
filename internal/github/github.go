@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -85,6 +84,7 @@ type RepoInfo struct {
 // Supports:
 //   - https://github.com/owner/repo
 //   - https://github.com/owner/repo/tree/branch/path
+//   - https://github.com/owner/repo/blob/branch/path/SKILL.md
 //   - owner/repo
 //   - owner/repo/path
 func ParseGitHubURL(input string) (*RepoInfo, error) {
@@ -101,14 +101,20 @@ func ParseGitHubURL(input string) (*RepoInfo, error) {
 			raw = raw[:idx]
 		}
 
-		if strings.Contains(raw, "/tree/") {
-			u, err := url.Parse(raw)
-			if err != nil {
-				return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
-			}
+		u, err := url.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
+		}
 
-			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-			if len(parts) < 4 || parts[2] != "tree" {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
+		}
+		if len(parts) > 2 {
+			if parts[2] != "tree" && parts[2] != "blob" {
+				return nil, fmt.Errorf("unsupported GitHub URL section: %s", parts[2])
+			}
+			if len(parts) < 4 || parts[3] == "" || (parts[2] == "blob" && len(parts) < 5) {
 				return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
 			}
 
@@ -116,10 +122,6 @@ func ParseGitHubURL(input string) (*RepoInfo, error) {
 			info.Repo = parts[1]
 
 			treeParts := parts[3:]
-			if len(treeParts) == 0 {
-				return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
-			}
-
 			info.TreeRef = strings.Join(treeParts, "/")
 			if strings.Contains(info.TreeRef, "%2F") || strings.Contains(info.TreeRef, "%2f") {
 				decoded, err := url.PathUnescape(info.TreeRef)
@@ -136,15 +138,9 @@ func ParseGitHubURL(input string) (*RepoInfo, error) {
 				}
 			}
 		} else {
-			// Pattern: https://github.com/owner/repo
-			simplePattern := regexp.MustCompile(`https://github\.com/([^/]+)/([^/]+)`)
-			if matches := simplePattern.FindStringSubmatch(input); len(matches) >= 3 {
-				info.Owner = matches[1]
-				info.Repo = matches[2]
-				info.Branch = "main" // default
-			} else {
-				return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
-			}
+			info.Owner = parts[0]
+			info.Repo = parts[1]
+			info.Branch = "main" // default
 		}
 	} else {
 		// Short format: owner/repo or owner/repo/path

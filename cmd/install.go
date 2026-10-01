@@ -29,7 +29,7 @@ Supported formats:
   owner/repo/path/to/skill       Install skill from subdirectory
   https://github.com/owner/repo  Full GitHub URL
 `,
-	Example: `  sk install anthropics/skills/docx
+	Example: `  sk install anthropics/skills/skills/docx
   sk install docx
   sk install obra/superpowers
   sk install https://github.com/user/repo`,

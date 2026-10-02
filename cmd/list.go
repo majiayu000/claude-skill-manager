@@ -14,11 +14,10 @@ var listCmd = &cobra.Command{
 	Aliases: []string{"ls", "l"},
 	Short:   "List installed skills",
 	Long:    `List all skills installed in your Claude Code skills directory.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		skills, err := skill.List()
 		if err != nil {
-			fmt.Println(styles.RenderError("Failed to list skills: " + err.Error()))
-			return
+			return fmt.Errorf("failed to list skills: %w", err)
 		}
 
 		fmt.Println()
@@ -26,6 +25,7 @@ var listCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println(ui.RenderSkillTable(skills))
 		fmt.Println()
+		return nil
 	},
 }
 

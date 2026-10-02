@@ -22,7 +22,7 @@ var rootCmd = &cobra.Command{
   ` + styles.SuccessStyle.Render("update") + `    Update installed skills
 
 ` + styles.MutedStyle.Render("Examples:") + `
-  sk install anthropics/skills/docx
+  sk install anthropics/skills/skills/docx
   sk install https://github.com/user/repo
   sk list
   sk uninstall my-skill

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +202,95 @@ func TestParseGitHubURLDoesNotTreatCommandMarkdownAsSkillFile(t *testing.T) {
 func TestDownloadClientHasTimeout(t *testing.T) {
 	if downloadClient.Timeout <= 0 {
 		t.Fatal("download client must have a bounded timeout")
+	}
+}
+
+func TestParseGitHubURLBlob(t *testing.T) {
+	for _, tc := range []struct {
+		input, branch, path, file, name string
+	}{
+		{"https://github.com/owner/repo/blob/main/skills/docx/SKILL.md", "main", "skills/docx", "", "docx"},
+		{"https://github.com/owner/repo/blob/develop/skills/docx/SKILL.md?plain=1#L2", "develop", "skills/docx", "", "docx"},
+		{"https://github.com/owner/repo/blob/main/.agents/project_analysis_agent_SKILL.md", "main", "", ".agents/project_analysis_agent_SKILL.md", "project_analysis_agent"},
+		{"https://github.com/owner/repo/blob/main/SKILL.md", "main", "", "", "repo"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			info, err := ParseGitHubURL(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Owner != "owner" || info.Repo != "repo" || info.Branch != tc.branch || info.Path != tc.path || info.FilePath != tc.file || GetSkillName(info) != tc.name {
+				t.Fatalf("unexpected blob target: %+v, name: %q", info, GetSkillName(info))
+			}
+		})
+	}
+}
+
+func TestParseGitHubURLRejectsUnsupportedSections(t *testing.T) {
+	for _, section := range []string{"commit/abc", "pull/1", "releases/tag/v1", "issues/1", "unknown/tree/main/skills/docx"} {
+		t.Run(section, func(t *testing.T) {
+			info, err := ParseGitHubURL("https://github.com/owner/repo/" + section)
+			if info != nil || err == nil || err.Error() != "unsupported GitHub URL section: "+strings.Split(section, "/")[0] {
+				t.Fatalf("unsupported section must return a named error, got %+v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestParseGitHubURLRejectsIncompleteBlob(t *testing.T) {
+	for _, suffix := range []string{"blob", "blob/main", "blob/main/", "blob//skills/docx/SKILL.md"} {
+		t.Run(suffix, func(t *testing.T) {
+			info, err := ParseGitHubURL("https://github.com/owner/repo/" + suffix)
+			if info != nil || err == nil {
+				t.Fatalf("incomplete blob URL must fail, got %+v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestParseGitHubURLRootAndTree(t *testing.T) {
+	for _, tc := range []struct{ input, path string }{
+		{"https://github.com/owner/repo", ""},
+		{"https://github.com/owner/repo.git", ""},
+		{"https://github.com/owner/repo/?tab=readme#readme", ""},
+		{"https://github.com/owner/repo/tree/main/skills/docx/SKILL.md", "skills/docx"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			info, err := ParseGitHubURL(tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Owner != "owner" || info.Repo != "repo" || info.Branch != "main" || info.Path != tc.path {
+				t.Fatalf("unexpected repository target: %+v", info)
+			}
+		})
+	}
+}
+
+func TestInstallBlobURLSelectsNestedSkill(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	zipPath := writeTestZip(t, map[string]string{
+		"repo-main/SKILL.md":              "wrong root skill\n",
+		"repo-main/skills/docx/SKILL.md":  "selected docx skill\n",
+		"repo-main/skills/docx/helper.md": "selected helper\n",
+	})
+	info, err := ParseGitHubURL("https://github.com/owner/repo/blob/main/skills/docx/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalDir, err := installZipAtomically(zipPath, info, GetSkillName(info), ExtractOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(finalDir, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(finalDir) != "docx" || string(body) != "selected docx skill\n" {
+		t.Fatalf("blob URL installed the wrong skill: %s, %q", finalDir, body)
+	}
+	if _, err := os.Stat(filepath.Join(finalDir, "helper.md")); err != nil {
+		t.Fatalf("nested skill assets were not installed: %v", err)
 	}
 }
 
@@ -568,6 +658,67 @@ func writeTestZip(t *testing.T, files map[string]string) string {
 	return path
 }
 
+func TestDownloadAndExtractHonorsEncodedBlobBranch(t *testing.T) {
+	for _, subpath := range []string{"", "/skills/docx", "/missing"} {
+		t.Run("root"+subpath, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			selected := "selected branch\n"
+			longZip := writeTestZip(t, map[string]string{
+				"repo-feature-foo/":                     "",
+				"repo-feature-foo/SKILL.md":             selected,
+				"repo-feature-foo/skills/docx/SKILL.md": selected,
+			})
+			shortZip := writeTestZip(t, map[string]string{
+				"repo-feature/":                         "",
+				"repo-feature/foo/SKILL.md":             "wrong branch\n",
+				"repo-feature/foo/skills/docx/SKILL.md": "wrong branch\n",
+				"repo-feature/foo/missing/SKILL.md":     "wrong branch\n",
+			})
+			var requests []string
+			restore := downloadClient
+			downloadClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests = append(requests, r.URL.Path)
+				zipPath := longZip
+				if r.URL.Path == "/owner/repo/archive/refs/heads/feature.zip" {
+					zipPath = shortZip
+				} else if r.URL.Path != "/owner/repo/archive/refs/heads/feature/foo.zip" {
+					t.Fatalf("unexpected archive request: %s", r.URL)
+				}
+				body, err := os.ReadFile(zipPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+			})}
+			t.Cleanup(func() { downloadClient = restore })
+			info, err := ParseGitHubURL("https://github.com/owner/repo/blob/feature%2Ffoo" + subpath + "/SKILL.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			finalDir, err := DownloadAndExtract(info, GetSkillName(info), ExtractOptions{})
+			if subpath == "/missing" {
+				if err == nil || finalDir != "" {
+					t.Fatalf("missing selected path must fail, got %q, %v", finalDir, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(filepath.Join(finalDir, "SKILL.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(body) != selected {
+					t.Fatalf("installed the wrong branch: %q", body)
+				}
+			}
+			if len(requests) != 1 || requests[0] != "/owner/repo/archive/refs/heads/feature/foo.zip" {
+				t.Fatalf("encoded branch must be the only archive requested: %v", requests)
+			}
+		})
+	}
+}
+
 func TestInstallPreservesDottedInstallerLikeSkillNames(t *testing.T) {
 	for _, name := range []string{".docs.staging-keep", ".docs.backup-keep"} {
 		t.Run(name, func(t *testing.T) {
@@ -597,5 +748,72 @@ func TestInstallPreservesDottedInstallerLikeSkillNames(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUnencodedBlobRefRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		ref, branch, file string
+		status            int
+	}{
+		{"feature/foo/skills/docx/SKILL.md", "feature/foo/skills", "docx/SKILL.md", 200},
+		{"feature/foo/skills/docx_skill.md", "feature/foo", "skills/docx_skill.md", 200},
+		{"feature/foo/skills/docx/SKILL.md", "feature/foo", "skills/docx/SKILL.md", 404},
+		{"feature/foo/skills/docx/SKILL.md", "feature/foo", "skills/docx/SKILL.md", 502},
+	} {
+		t.Run(tc.ref+http.StatusText(tc.status), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			zipPath := writeTestZip(t, map[string]string{"repo-selected/": "", "repo-selected/" + tc.file: "selected blob\n"})
+			data, err := os.ReadFile(zipPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var requests []string
+			restore := downloadClient
+			downloadClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				requests = append(requests, r.URL.Path)
+				code := tc.status
+				if tc.status == 200 && r.URL.Path != "/owner/repo/archive/refs/heads/"+tc.branch+".zip" {
+					code = 404
+				}
+				return &http.Response{StatusCode: code, Status: strings.TrimSpace(strings.Join([]string{strconv.Itoa(code), http.StatusText(code)}, " ")), Body: io.NopCloser(bytes.NewReader(data)), Header: make(http.Header)}, nil
+			})}
+			t.Cleanup(func() { downloadClient = restore })
+			info, err := ParseGitHubURL("https://github.com/owner/repo/blob/" + tc.ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir, err := DownloadAndExtract(info, GetSkillName(info), ExtractOptions{})
+			if tc.status == 200 {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+				if err != nil || string(got) != "selected blob\n" {
+					t.Fatalf("wrong blob: %q %v", got, err)
+				}
+				for _, p := range requests {
+					if strings.Contains(p, "SKILL.md.zip") || strings.Contains(p, "docx_skill.md.zip") {
+						t.Fatalf("blob file became branch: %v", requests)
+					}
+				}
+			} else {
+				var statusErr *httpStatusError
+				if dir != "" || !errors.As(err, &statusErr) || statusErr.status != strconv.Itoa(tc.status)+" "+http.StatusText(tc.status) {
+					t.Fatalf("original status error lost: %q %v", dir, err)
+				}
+				if tc.status == 502 && len(requests) != 1 {
+					t.Fatalf("non-404 must not probe: %v", requests)
+				}
+			}
+		})
+	}
+}
+
+func TestBlobRejectsNonSkillFile(t *testing.T) {
+	for _, p := range []string{"README.md", "helper.py", "skills/docx/README.md"} {
+		if info, err := ParseGitHubURL("https://github.com/owner/repo/blob/main/" + p); info != nil || err == nil || !strings.Contains(err.Error(), "unsupported GitHub blob file") {
+			t.Fatalf("non-skill blob accepted: %+v %v", info, err)
+		}
 	}
 }

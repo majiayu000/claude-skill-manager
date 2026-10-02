@@ -103,7 +103,11 @@ Supported formats:
 		}
 
 		if installPath == "" {
-			installPath = skill.GetSkillDir(skillName)
+			installPath, err = skill.GetSkillDir(skillName)
+			if err != nil {
+				fmt.Println(styles.RenderError(err.Error()))
+				os.Exit(1)
+			}
 		}
 		s, _ := skill.Get(skillName)
 		fmt.Println(styles.RenderSuccess(fmt.Sprintf("Installed %s", styles.CodeStyle.Render(skillName))))

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -29,10 +30,23 @@ func DefaultConfig() *Config {
 	}
 }
 
-// GetSkillsDir returns the skills directory path
-func GetSkillsDir() string {
+// GetSkillsDir returns the skills directory path, expanding a leading ~/ or ~.
+func GetSkillsDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve home directory: %w", err)
+	}
 	cfg := Load()
-	return cfg.SkillsDir
+	switch {
+	case cfg.SkillsDir == "":
+		return filepath.Join(homeDir, ".claude", "skills"), nil
+	case cfg.SkillsDir == "~":
+		return homeDir, nil
+	case strings.HasPrefix(cfg.SkillsDir, "~/"):
+		return filepath.Join(homeDir, cfg.SkillsDir[2:]), nil
+	default:
+		return cfg.SkillsDir, nil
+	}
 }
 
 // GetRegistryTTL returns registry cache TTL in hours.
@@ -124,6 +138,9 @@ func load(path string) *Config {
 
 // EnsureSkillsDir creates the skills directory if it doesn't exist
 func EnsureSkillsDir() error {
-	dir := GetSkillsDir()
+	dir, err := GetSkillsDir()
+	if err != nil {
+		return err
+	}
 	return os.MkdirAll(dir, 0755)
 }

@@ -34,6 +34,11 @@
 ```bash
 # Using Go
 go install github.com/majiayu000/claude-skill-manager@latest
+# Go names the executable claude-skill-manager; expose the documented sk command.
+sk_bin_dir="$(go env GOBIN)"
+if [ -z "$sk_bin_dir" ]; then sk_bin_dir="$(go env GOPATH)/bin"; fi
+mv "$sk_bin_dir/claude-skill-manager" "$sk_bin_dir/sk"
+# Ensure sk_bin_dir is on your PATH.
 
 # Or download a binary archive from the latest GitHub release.
 ```
@@ -63,7 +68,7 @@ sudo mv sk /usr/local/bin/
 
 ```bash
 # Install a skill from GitHub
-sk install anthropics/skills/docx
+sk install anthropics/skills/skills/docx
 sk install obra/superpowers
 sk install https://github.com/user/repo
 
@@ -115,9 +120,9 @@ $ sk search
 Anthropic Official (anthropics/skills)
   Official Claude Code skills from Anthropic
 
-    📦 docx                      sk install anthropics/skills/docx
-    📦 pdf                       sk install anthropics/skills/pdf
-    📦 pptx                      sk install anthropics/skills/pptx
+    📦 docx                      sk install anthropics/skills/skills/docx
+    📦 pdf                       sk install anthropics/skills/skills/pdf
+    📦 pptx                      sk install anthropics/skills/skills/pptx
     ...
 ```
 
@@ -148,19 +153,54 @@ sk install https://github.com/owner/repo
 sk install https://github.com/owner/repo/tree/main/path
 
 # Examples
-sk install anthropics/skills/docx  # Official Anthropic skill
+sk install anthropics/skills/skills/docx  # Official Anthropic skill
 sk install obra/superpowers        # Community skill
 ```
 
-## vs SkillsMP
+## Find and install one Claude Code skill
 
-[SkillsMP](https://skillsmp.com) is the best website to **discover** skills.
+Search the [public registry](https://majiayu000.github.io/claude-skill-registry/) or
+[SkillsMP](https://skillsmp.com/), then open the original repository. Read its
+`SKILL.md`, scripts and license before installing. A catalog entry is a discovery
+pointer; its inclusion does not establish authorship, permission or safety.
 
-`sk` is the best tool to **manage** skills.
+For example, Anthropic keeps its document skill in
+[`skills/docx`](https://github.com/anthropics/skills/tree/main/skills/docx), with
+its own [license](https://github.com/anthropics/skills/blob/main/skills/docx/LICENSE.txt).
+After reviewing that source:
 
-They're complementary:
-1. Find skills on SkillsMP
-2. Install & manage with `sk`
+```bash
+sk install anthropics/skills/skills/docx
+sk list
+sk info docx
+sk doctor
+```
+
+Use the exact repository subdirectory: `owner/repo/path` selects that path,
+not a recursive search for a skill name. `sk info` shows an **installed** skill's
+source and location; it does not preview remote content. `sk doctor` checks local
+installation health, not the trustworthiness of third-party instructions.
+
+`sk` manages skills in its configured Claude Code directory. For installation
+across other agent runtimes, see the supported agents and selection options in
+[Vercel's skills CLI documentation](https://github.com/vercel-labs/skills).
+
+### Troubleshooting
+
+- **`sk` is not found:** check that the Go-installed executable was renamed as
+  shown above and that its directory is on `PATH`.
+- **Registry search is unavailable:** run `sk doctor --registry` to inspect the
+  configured registry and cache. Registry requests require network access;
+  fallback featured results are not the complete catalog.
+- **A skill is already installed:** inspect it with `sk info <name>`. To replace
+  it with a reviewed source, use `sk install <source> --force`. Automated
+  `sk update` is not implemented.
+- **Installation succeeds but the skill is missing:** compare the location from
+  `sk info <name>` with the skills directory used by your Claude Code session.
+
+Report reproducible CLI problems in
+[GitHub issues](https://github.com/majiayu000/claude-skill-manager/issues).
+Report problems with skill instructions to their original repository.
 
 ## Configuration
 

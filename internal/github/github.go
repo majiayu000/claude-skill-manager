@@ -129,6 +129,14 @@ func ParseGitHubURL(input string) (*RepoInfo, error) {
 				}
 			}
 
+			if parts[2] == "blob" {
+				file := RepoInfo{Path: parts[len(parts)-1]}
+				normalizeSkillPath(&file)
+				if file.Path != "" {
+					return nil, fmt.Errorf("unsupported GitHub blob file: %s", parts[len(parts)-1])
+				}
+			}
+
 			info.Owner = parts[0]
 			info.Repo = parts[1]
 
@@ -212,6 +220,11 @@ func DownloadAndExtract(info *RepoInfo, targetName string, opts ExtractOptions) 
 		zipPath, err = downloadToTempFile(archiveURL(info))
 	}
 	if err != nil {
+		if errors.As(err, &statusErr) && statusErr.status == "404 Not Found" && info.TreeRefAmbiguous {
+			if resolved, resolveErr := tryResolveAmbiguousTreeRef(info, targetName, opts); resolveErr == nil {
+				return resolved, nil
+			}
+		}
 		return "", err
 	}
 	defer func() { _ = os.Remove(zipPath) }()
@@ -385,8 +398,13 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string, opts ExtractO
 		return "", fmt.Errorf("ambiguous tree ref has insufficient parts")
 	}
 
+	// Keep a named skill file in the path, rather than probing it as a branch.
+	end := len(parts)
+	if info.FilePath != "" || parts[end-1] == "SKILL.md" {
+		end--
+	}
 	// Try longer branch candidates first.
-	for i := len(parts); i >= 1; i-- {
+	for i := end; i >= 1; i-- {
 		branch := strings.Join(parts[:i], "/")
 		path := ""
 		if i < len(parts) {
@@ -396,6 +414,8 @@ func tryResolveAmbiguousTreeRef(info *RepoInfo, targetName string, opts ExtractO
 		infoCopy := *info
 		infoCopy.Branch = branch
 		infoCopy.Path = path
+		infoCopy.FilePath = ""
+		normalizeSkillPath(&infoCopy)
 
 		zipPath, err := downloadToTempFile(archiveURL(&infoCopy))
 		if err != nil {

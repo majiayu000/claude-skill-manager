@@ -131,7 +131,7 @@ func load(path string) *Config {
 
 	if err := json.Unmarshal(data, cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "Warning: failed to parse config file, using defaults:", err)
-		return cfg
+		return DefaultConfig()
 	}
 	return cfg
 }

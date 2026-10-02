@@ -100,9 +100,9 @@ func showFallbackSkills() {
 	skills := []struct {
 		name, install, desc string
 	}{
-		{"docx", "anthropics/skills/docx", "Document creation and editing"},
-		{"pdf", "anthropics/skills/pdf", "PDF document manipulation"},
-		{"pptx", "anthropics/skills/pptx", "PowerPoint presentations"},
+		{"docx", "anthropics/skills/skills/docx", "Document creation and editing"},
+		{"pdf", "anthropics/skills/skills/pdf", "PDF document manipulation"},
+		{"pptx", "anthropics/skills/skills/pptx", "PowerPoint presentations"},
 		{"superpowers", "obra/superpowers", "20+ battle-tested skills"},
 	}
 

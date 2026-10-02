@@ -40,6 +40,21 @@ func TestGetRegistryBaseURLHonoursOverride(t *testing.T) {
 	}
 }
 
+func TestLoadUsesDefaultsAfterTypeError(t *testing.T) {
+	writeConfig(t, `{"skills_dir": "/tmp/custom", "registry_ttl_hours": "nope", "registry": "https://example.test/registry"}`)
+
+	defaults := DefaultConfig()
+	if got := Load(); *got != *defaults {
+		t.Errorf("got config %+v, want defaults %+v", got, defaults)
+	}
+	if got := GetSkillsDir(); got != defaults.SkillsDir {
+		t.Errorf("got skills directory %q, want default %q", got, defaults.SkillsDir)
+	}
+	if got := GetRegistryBaseURL(); got != DefaultRegistryURL {
+		t.Errorf("got registry URL %q, want default %q", got, DefaultRegistryURL)
+	}
+}
+
 func TestLoadReadsFileOnlyOnce(t *testing.T) {
 	writeConfig(t, `{"registry": "https://example.test/registry"}`)
 

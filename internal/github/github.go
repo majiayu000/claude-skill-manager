@@ -234,7 +234,10 @@ func installZipAtomically(zipPath string, info *RepoInfo, targetName string, opt
 		return "", fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
-	skillsDir := config.GetSkillsDir()
+	skillsDir, err := config.GetSkillsDir()
+	if err != nil {
+		return "", err
+	}
 	skill.RecoverOrphanedInstallerDirs(skillsDir)
 	finalDir, err := resolveFinalSkillDir(skillsDir, targetName, opts.FinalDir)
 	if err != nil {

@@ -40,6 +40,21 @@ func TestGetRegistryBaseURLHonoursOverride(t *testing.T) {
 	}
 }
 
+func TestLoadUsesDefaultsAfterTypeError(t *testing.T) {
+	writeConfig(t, `{"skills_dir": "/tmp/custom", "registry_ttl_hours": "nope", "registry": "https://example.test/registry"}`)
+
+	defaults := DefaultConfig()
+	if got := Load(); *got != *defaults {
+		t.Errorf("got config %+v, want defaults %+v", got, defaults)
+	}
+	if got, err := GetSkillsDir(); err != nil || got != defaults.SkillsDir {
+		t.Errorf("got skills directory %q, error %v, want default %q", got, err, defaults.SkillsDir)
+	}
+	if got := GetRegistryBaseURL(); got != DefaultRegistryURL {
+		t.Errorf("got registry URL %q, want default %q", got, DefaultRegistryURL)
+	}
+}
+
 func TestLoadReadsFileOnlyOnce(t *testing.T) {
 	writeConfig(t, `{"registry": "https://example.test/registry"}`)
 
@@ -54,5 +69,75 @@ func TestLoadReadsFileOnlyOnce(t *testing.T) {
 	}
 	if got := GetRegistryBaseURL(); got != "https://example.test/registry" {
 		t.Fatalf("accessor re-read disk: got %q", got)
+	}
+}
+
+func TestGetSkillsDirResolvesHomePaths(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		body         string
+		want         string
+		relativeHome bool
+	}{
+		{"default", "", ".claude/skills", true},
+		{"empty", `{"skills_dir": ""}`, ".claude/skills", true},
+		{"README sample", `{"skills_dir": "~/.claude/skills"}`, ".claude/skills", true},
+		{"home itself", `{"skills_dir": "~"}`, ".", true},
+		{"home slash", `{"skills_dir": "~/"}`, ".", true},
+		{"custom home path", `{"skills_dir": "~/custom/skills"}`, "custom/skills", true},
+		{"absolute override", `{"skills_dir": "/tmp/custom-skills"}`, "/tmp/custom-skills", false},
+		{"relative override", `{"skills_dir": "custom/skills"}`, "custom/skills", false},
+		{"literal tilde prefix", `{"skills_dir": "~other/skills"}`, "~other/skills", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			writeConfig(t, tt.body)
+			want := tt.want
+			if tt.relativeHome {
+				want = filepath.Join(os.Getenv("HOME"), want)
+			}
+			got, err := GetSkillsDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("got skills directory %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestEnsureSkillsDirCreatesHomeDirectory(t *testing.T) {
+	for _, body := range []string{`{"skills_dir": "~/.claude/skills"}`, `{"skills_dir": ""}`} {
+		t.Run(body, func(t *testing.T) {
+			writeConfig(t, body)
+			cwd := t.TempDir()
+			t.Chdir(cwd)
+			if err := EnsureSkillsDir(); err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(os.Getenv("HOME"), ".claude", "skills")
+			if info, err := os.Stat(want); err != nil || !info.IsDir() {
+				t.Fatalf("expected skills directory at %q, info=%v, err=%v", want, info, err)
+			}
+			if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 0 {
+				t.Fatalf("working directory was modified: entries=%v, err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestEnsureSkillsDirFailsWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	if err := os.WriteFile(".skrc", []byte(`{"skills_dir": "custom/skills"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSkillsDir(); err == nil {
+		t.Fatal("expected a home directory error")
+	}
+	if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 1 || entries[0].Name() != ".skrc" {
+		t.Fatalf("working directory was modified: entries=%v, err=%v", entries, err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,10 @@ type SkillMeta struct {
 
 // List returns all installed skills
 func List() ([]Skill, error) {
-	skillsDir := config.GetSkillsDir()
+	skillsDir, err := config.GetSkillsDir()
+	if err != nil {
+		return nil, err
+	}
 
 	// Restore skills left under .*.backup-* after an interrupted swap, then
 	// drop leftover staging directories so they never appear as installs.
@@ -121,11 +125,11 @@ func Get(name string) (*Skill, error) {
 // Front-matter aliases are intentionally ignored so install --force cannot
 // treat an unrelated directory as already occupying the install target.
 func Exists(name string) bool {
-	dir, ok := skillDirForName(name)
-	if !ok {
+	dir, err := skillDirForName(name)
+	if err != nil {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(dir, "SKILL.md"))
+	_, err = os.Stat(filepath.Join(dir, "SKILL.md"))
 	return err == nil
 }
 
@@ -133,9 +137,9 @@ func Exists(name string) bool {
 // It never resolves front-matter aliases; callers that accept an alias must
 // resolve it via Get and pass filepath.Base(s.Path).
 func Remove(name string) error {
-	dir, ok := skillDirForName(name)
-	if !ok {
-		return os.ErrNotExist
+	dir, err := skillDirForName(name)
+	if err != nil {
+		return err
 	}
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); os.IsNotExist(err) {
 		return os.ErrNotExist
@@ -148,14 +152,14 @@ func Remove(name string) error {
 
 // skillDirForName returns skillsDir/name when name is a valid skill directory
 // identity. Invalid names (SEC-07 / SEC-08) never resolve to the skills root.
-func skillDirForName(name string) (string, bool) {
+func skillDirForName(name string) (string, error) {
 	if err := ValidateSkillName(name); err != nil {
-		return "", false
+		return "", os.ErrNotExist
 	}
 	if isInstallerTempDir(name) {
-		return "", false
+		return "", os.ErrNotExist
 	}
-	return GetSkillDir(name), true
+	return GetSkillDir(name)
 }
 
 // parseSkillMd extracts metadata from SKILL.md front matter
@@ -226,7 +230,9 @@ const (
 )
 
 // parseInstallerTempName recognizes ".<base>.staging-<suffix>" and
-// ".<base>.backup-<suffix>" names produced by os.MkdirTemp.
+// ".<base>.backup-<suffix>" names produced by os.MkdirTemp. The suffix is
+// the canonical decimal representation of a random uint32; other suffixes
+// belong to user-chosen skill names. The final marker follows the whole base.
 func parseInstallerTempName(name string) (base string, kind installerTempKind, ok bool) {
 	if !strings.HasPrefix(name, ".") {
 		return "", 0, false
@@ -234,13 +240,13 @@ func parseInstallerTempName(name string) (base string, kind installerTempKind, o
 	rest := name[1:]
 	const staging = ".staging-"
 	const backup = ".backup-"
-	stagingIdx := strings.Index(rest, staging)
-	backupIdx := strings.Index(rest, backup)
+	stagingIdx := strings.LastIndex(rest, staging)
+	backupIdx := strings.LastIndex(rest, backup)
 
 	var marker string
 	var idx int
 	switch {
-	case stagingIdx >= 0 && (backupIdx < 0 || stagingIdx <= backupIdx):
+	case stagingIdx >= 0 && (backupIdx < 0 || stagingIdx >= backupIdx):
 		marker, idx, kind = staging, stagingIdx, installerTempStaging
 	case backupIdx >= 0:
 		marker, idx, kind = backup, backupIdx, installerTempBackup
@@ -250,7 +256,8 @@ func parseInstallerTempName(name string) (base string, kind installerTempKind, o
 
 	base = rest[:idx]
 	suffix := rest[idx+len(marker):]
-	if base == "" || suffix == "" {
+	token, err := strconv.ParseUint(suffix, 10, 32)
+	if base == "" || err != nil || strconv.FormatUint(token, 10) != suffix {
 		return "", 0, false
 	}
 	if strings.ContainsAny(base, `/\`) {
@@ -377,10 +384,13 @@ func isPathReferenceName(name string) bool {
 
 // GetSkillDir returns the full path for a skill. Invalid names refuse to
 // leave the skills root (callers should validate earlier for clear errors).
-func GetSkillDir(name string) string {
-	skillsDir := config.GetSkillsDir()
-	if err := ValidateSkillName(name); err != nil {
-		return skillsDir
+func GetSkillDir(name string) (string, error) {
+	skillsDir, err := config.GetSkillsDir()
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(skillsDir, name)
+	if err := ValidateSkillName(name); err != nil {
+		return skillsDir, nil
+	}
+	return filepath.Join(skillsDir, name), nil
 }

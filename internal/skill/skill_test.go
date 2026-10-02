@@ -142,9 +142,9 @@ func TestValidateSkillNameRejectsPathEscape(t *testing.T) {
 		"../outside",
 		"..",
 		".",
-		". ",      // Win32 strips trailing space → "."
-		".. ",     // Win32 strips trailing space → ".."
-		"...",     // Win32 strips trailing periods → empty / current-dir alias
+		". ",  // Win32 strips trailing space → "."
+		".. ", // Win32 strips trailing space → ".."
+		"...", // Win32 strips trailing periods → empty / current-dir alias
 		". .",
 		".. .",
 		" .",
@@ -168,19 +168,48 @@ func TestGetSkillDirRefusesEscape(t *testing.T) {
 	t.Setenv("HOME", home)
 	skillsDir := filepath.Join(home, ".claude", "skills")
 
-	got := GetSkillDir("docx")
+	got, err := GetSkillDir("docx")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := filepath.Join(skillsDir, "docx")
 	if got != want {
 		t.Fatalf("GetSkillDir(docx) = %q, want %q", got, want)
 	}
 
-	if got := GetSkillDir("/tmp/pwned-skill"); got != skillsDir {
+	if got, err := GetSkillDir("/tmp/pwned-skill"); err != nil || got != skillsDir {
 		t.Fatalf("GetSkillDir(absolute) = %q, want skills root %q", got, skillsDir)
 	}
-	if got := GetSkillDir("../outside"); got != skillsDir {
+	if got, err := GetSkillDir("../outside"); err != nil || got != skillsDir {
 		t.Fatalf("GetSkillDir(..) = %q, want skills root %q", got, skillsDir)
 	}
-	if got := GetSkillDir("."); got != skillsDir {
+	if got, err := GetSkillDir("."); err != nil || got != skillsDir {
 		t.Fatalf("GetSkillDir(.) = %q, want skills root %q", got, skillsDir)
+	}
+}
+
+func TestSkillOperationsFailWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	t.Chdir(t.TempDir())
+	path := filepath.Join(".claude", "skills", "docx", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: docx\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := GetSkillDir("docx"); err == nil || got != "" {
+		t.Fatalf("expected no path and a home directory error, got %q, %v", got, err)
+	}
+	if _, err := List(); err == nil {
+		t.Fatal("expected List to return a home directory error")
+	}
+	if err := Remove("docx"); err == nil || os.IsNotExist(err) {
+		t.Fatalf("expected Remove to return a home directory error, got %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("working directory skill was modified: %v", err)
 	}
 }

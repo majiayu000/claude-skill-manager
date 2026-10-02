@@ -17,16 +17,15 @@ var updateCmd = &cobra.Command{
 If no skill name is provided, all skills will be updated.`,
 	Example: `  sk update           # Update all skills
   sk update my-skill  # Update specific skill`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		skills, err := skill.List()
 		if err != nil {
-			fmt.Println(styles.RenderError("Failed to list skills: " + err.Error()))
-			return
+			return fmt.Errorf("failed to list skills: %w", err)
 		}
 
 		if len(skills) == 0 {
 			fmt.Println(styles.RenderWarning("No skills installed."))
-			return
+			return nil
 		}
 
 		target := ""
@@ -44,7 +43,7 @@ If no skill name is provided, all skills will be updated.`,
 			}
 			if !found {
 				fmt.Println(styles.RenderError(fmt.Sprintf("Skill '%s' is not installed.", target)))
-				return
+				return nil
 			}
 		}
 
@@ -65,6 +64,7 @@ If no skill name is provided, all skills will be updated.`,
 		fmt.Println()
 		fmt.Println(styles.MutedStyle.Render("  For now, use: sk uninstall <name> && sk install <source>"))
 		fmt.Println()
+		return nil
 	},
 }
 

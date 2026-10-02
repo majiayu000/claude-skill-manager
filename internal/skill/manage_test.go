@@ -178,11 +178,16 @@ func TestListSkipsStagingDirectories(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	skillsDir := filepath.Join(home, ".claude", "skills")
-	for _, tempName := range []string{".docx.staging-abc123", ".docx.backup-xyz"} {
-		tempDir := filepath.Join(skillsDir, tempName)
-		if err := os.MkdirAll(tempDir, 0755); err != nil {
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	var tempNames []string
+	for _, pattern := range []string{".docx.staging-", ".docx.backup-"} {
+		tempDir, err := os.MkdirTemp(skillsDir, pattern)
+		if err != nil {
 			t.Fatal(err)
 		}
+		tempNames = append(tempNames, filepath.Base(tempDir))
 		if err := os.WriteFile(filepath.Join(tempDir, "SKILL.md"), []byte("---\nname: docx\n---\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -205,8 +210,16 @@ func TestListSkipsStagingDirectories(t *testing.T) {
 	if filepath.Base(skills[0].Path) != "docx" {
 		t.Fatalf("unexpected skill path: %s", skills[0].Path)
 	}
-	if Exists(".docx.staging-abc123") || Exists(".docx.backup-xyz") {
-		t.Fatal("installer temp directories must not match Exists")
+	for _, name := range tempNames {
+		if Exists(name) {
+			t.Fatalf("installer temp directory %q must not match Exists", name)
+		}
+		if err := Remove(name); !os.IsNotExist(err) {
+			t.Fatalf("installer temp directory %q must not be removable as a skill: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, tempNames[0])); !os.IsNotExist(err) {
+		t.Fatalf("expected orphaned staging directory removed, got %v", err)
 	}
 }
 
@@ -254,45 +267,97 @@ func TestListDoesNotHideCustomNamesContainingBackupSubstring(t *testing.T) {
 	if isInstallerTempDir("foo.backup-prod") {
 		t.Fatal("user-chosen foo.backup-prod must not match installer temp pattern")
 	}
-	if !isInstallerTempDir(".docx.backup-abc123") {
+	if !isInstallerTempDir(".docx.backup-123456") {
 		t.Fatal("expected installer backup dir to match temp pattern")
 	}
-	if !isInstallerTempDir(".docx.staging-abc123") {
+	if !isInstallerTempDir(".docx.staging-123456") {
 		t.Fatal("expected installer staging dir to match temp pattern")
 	}
 }
 
 func TestListRecoversOrphanedBackupWhenFinalMissing(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	for _, name := range []string{"docx", ".docs.staging-keep", ".docs.backup-keep"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
 
-	skillsDir := filepath.Join(home, ".claude", "skills")
-	backupDir := filepath.Join(skillsDir, ".docx.backup-orphan1")
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	original := "---\nname: docx\n---\nrecovered\n"
-	if err := os.WriteFile(filepath.Join(backupDir, "SKILL.md"), []byte(original), 0644); err != nil {
-		t.Fatal(err)
-	}
+			skillsDir := filepath.Join(home, ".claude", "skills")
+			if err := os.MkdirAll(skillsDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			backupDir, err := os.MkdirTemp(skillsDir, "."+name+".backup-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := "---\nname: docs\n---\nrecovered\n"
+			if err := os.WriteFile(filepath.Join(backupDir, "SKILL.md"), []byte(original), 0644); err != nil {
+				t.Fatal(err)
+			}
 
-	skills, err := List()
-	if err != nil {
-		t.Fatal(err)
+			skills, err := List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(skills) != 1 || filepath.Base(skills[0].Path) != name {
+				t.Fatalf("expected backup recovered to %q, got %#v", name, skills)
+			}
+			got, err := os.ReadFile(filepath.Join(skillsDir, name, "SKILL.md"))
+			if err != nil {
+				t.Fatalf("expected backup restored: %v", err)
+			}
+			if string(got) != original {
+				t.Fatalf("restored contents mismatch: %q", got)
+			}
+			if _, err := os.Stat(backupDir); !os.IsNotExist(err) {
+				t.Fatal("expected orphaned backup directory to be moved away")
+			}
+		})
 	}
-	if len(skills) != 1 {
-		t.Fatalf("expected recovered skill, got %#v", skills)
-	}
-	finalDir := filepath.Join(skillsDir, "docx")
-	got, err := os.ReadFile(filepath.Join(finalDir, "SKILL.md"))
-	if err != nil {
-		t.Fatalf("expected backup restored to docx: %v", err)
-	}
-	if string(got) != original {
-		t.Fatalf("restored contents mismatch: %q", got)
-	}
-	if _, err := os.Stat(backupDir); !os.IsNotExist(err) {
-		t.Fatal("expected orphaned backup directory to be moved away")
+}
+
+func TestDottedInstallerLikeSkillNamesRemainManageable(t *testing.T) {
+	for _, name := range []string{
+		".docs.staging-keep", ".docs.backup-keep",
+		".docs.staging-abc123", ".docs.backup-xyz",
+		".docs.staging-0001", ".docs.backup-4294967296",
+		".docs.staging-+1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateSkillName(name); err != nil {
+				t.Fatal(err)
+			}
+			original := "---\nname: docs\n---\nkeep\n"
+			dir := installSkill(t, name, original)
+			if !Exists(name) {
+				t.Error("expected installed directory to match Exists before List")
+			}
+			for i := 0; i < 2; i++ {
+				skills, err := List()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(skills) != 1 || filepath.Base(skills[0].Path) != name {
+					t.Errorf("expected %q to remain listed, got %#v", name, skills)
+				}
+			}
+			got, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+			if err != nil || string(got) != original {
+				t.Errorf("skill contents must remain at original path: got %q, error %v", got, err)
+			}
+			s, err := Get(name)
+			if err != nil || s == nil || s.Path != dir {
+				t.Errorf("Get must find dotted install: got %#v, error %v", s, err)
+			}
+			if !Exists(name) {
+				t.Error("expected installed directory to match Exists after List")
+			}
+			if err := Remove(name); err != nil {
+				t.Errorf("expected dotted install to be removable: %v", err)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("expected uninstall to remove directory, got %v", err)
+			}
+		})
 	}
 }
 

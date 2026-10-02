@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -229,7 +230,9 @@ const (
 )
 
 // parseInstallerTempName recognizes ".<base>.staging-<suffix>" and
-// ".<base>.backup-<suffix>" names produced by os.MkdirTemp.
+// ".<base>.backup-<suffix>" names produced by os.MkdirTemp. The suffix is
+// the canonical decimal representation of a random uint32; other suffixes
+// belong to user-chosen skill names. The final marker follows the whole base.
 func parseInstallerTempName(name string) (base string, kind installerTempKind, ok bool) {
 	if !strings.HasPrefix(name, ".") {
 		return "", 0, false
@@ -237,13 +240,13 @@ func parseInstallerTempName(name string) (base string, kind installerTempKind, o
 	rest := name[1:]
 	const staging = ".staging-"
 	const backup = ".backup-"
-	stagingIdx := strings.Index(rest, staging)
-	backupIdx := strings.Index(rest, backup)
+	stagingIdx := strings.LastIndex(rest, staging)
+	backupIdx := strings.LastIndex(rest, backup)
 
 	var marker string
 	var idx int
 	switch {
-	case stagingIdx >= 0 && (backupIdx < 0 || stagingIdx <= backupIdx):
+	case stagingIdx >= 0 && (backupIdx < 0 || stagingIdx >= backupIdx):
 		marker, idx, kind = staging, stagingIdx, installerTempStaging
 	case backupIdx >= 0:
 		marker, idx, kind = backup, backupIdx, installerTempBackup
@@ -253,7 +256,8 @@ func parseInstallerTempName(name string) (base string, kind installerTempKind, o
 
 	base = rest[:idx]
 	suffix := rest[idx+len(marker):]
-	if base == "" || suffix == "" {
+	token, err := strconv.ParseUint(suffix, 10, 32)
+	if base == "" || err != nil || strconv.FormatUint(token, 10) != suffix {
 		return "", 0, false
 	}
 	if strings.ContainsAny(base, `/\`) {

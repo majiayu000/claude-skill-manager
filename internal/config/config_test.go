@@ -47,8 +47,8 @@ func TestLoadUsesDefaultsAfterTypeError(t *testing.T) {
 	if got := Load(); *got != *defaults {
 		t.Errorf("got config %+v, want defaults %+v", got, defaults)
 	}
-	if got := GetSkillsDir(); got != defaults.SkillsDir {
-		t.Errorf("got skills directory %q, want default %q", got, defaults.SkillsDir)
+	if got, err := GetSkillsDir(); err != nil || got != defaults.SkillsDir {
+		t.Errorf("got skills directory %q, error %v, want default %q", got, err, defaults.SkillsDir)
 	}
 	if got := GetRegistryBaseURL(); got != DefaultRegistryURL {
 		t.Errorf("got registry URL %q, want default %q", got, DefaultRegistryURL)

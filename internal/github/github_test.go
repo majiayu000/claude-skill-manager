@@ -406,6 +406,9 @@ func TestDownloadAndExtractDefaultBranchFallback(t *testing.T) {
 				branch, status := "main", tc.mainStatus
 				if r.URL.Path == "/owner/repo/archive/refs/heads/master.zip" {
 					branch, status = "master", tc.masterStatus
+				} else if tc.name == "explicit main path" && (r.URL.Path == "/owner/repo/archive/refs/heads/main/skills/docx.zip" || r.URL.Path == "/owner/repo/archive/refs/heads/main/skills.zip") {
+					http.NotFound(w, r)
+					return
 				} else if r.URL.Path != "/owner/repo/archive/refs/heads/main.zip" {
 					t.Errorf("unexpected archive request: %s", r.URL)
 					http.NotFound(w, r)
@@ -475,6 +478,9 @@ func TestDownloadAndExtractDefaultBranchFallback(t *testing.T) {
 			wantRequests := "/owner/repo/archive/refs/heads/main.zip"
 			if tc.wantFallback {
 				wantRequests += ",/owner/repo/archive/refs/heads/master.zip"
+			} else if tc.name == "explicit main path" {
+				// Preserve #51's ambiguous-ref probes without a master fallback.
+				wantRequests += ",/owner/repo/archive/refs/heads/main/skills/docx.zip,/owner/repo/archive/refs/heads/main/skills.zip,/owner/repo/archive/refs/heads/main.zip"
 			}
 			if gotRequests != wantRequests {
 				t.Errorf("HTTP requests = %q, want %q", gotRequests, wantRequests)

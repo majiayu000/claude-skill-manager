@@ -20,10 +20,10 @@ var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check skills health",
 	Long:  `Run diagnostics to check for common issues with your skills setup and registry cache.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if doctorRegistry {
 			runRegistryDiagnostics()
-			return
+			return nil
 		}
 
 		fmt.Println()
@@ -33,7 +33,10 @@ var doctorCmd = &cobra.Command{
 		issues := 0
 
 		// Check skills directory exists
-		skillsDir := config.GetSkillsDir()
+		skillsDir, err := config.GetSkillsDir()
+		if err != nil {
+			return err
+		}
 		if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 			fmt.Printf("  %s Skills directory does not exist: %s\n",
 				styles.WarningStyle.Render(styles.IconWarning),
@@ -92,6 +95,7 @@ var doctorCmd = &cobra.Command{
 			fmt.Printf(styles.WarningStyle.Render("  Found %d issue(s). See above for details.\n"), issues)
 		}
 		fmt.Println()
+		return nil
 	},
 }
 

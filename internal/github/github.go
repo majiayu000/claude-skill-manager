@@ -33,8 +33,12 @@ func (e *httpStatusError) Error() string {
 }
 
 func archiveURL(info *RepoInfo) string {
-	return fmt.Sprintf("https://github.com/%s/%s/archive/refs/heads/%s.zip",
-		info.Owner, info.Repo, info.Branch)
+	return (&url.URL{
+		Scheme: "https",
+		Host:   "github.com",
+		Path: fmt.Sprintf("/%s/%s/archive/refs/heads/%s.zip",
+			info.Owner, info.Repo, info.Branch),
+	}).String()
 }
 
 // downloadToTempFile fetches url into a temp file and returns its path.
@@ -107,9 +111,16 @@ func ParseGitHubURL(input string) (*RepoInfo, error) {
 				return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
 			}
 
-			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+			// Split before decoding so an encoded slash stays in its branch segment.
+			parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
 			if len(parts) < 4 || parts[2] != "tree" {
 				return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
+			}
+			for i, part := range parts {
+				parts[i], err = url.PathUnescape(part)
+				if err != nil {
+					return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
+				}
 			}
 
 			info.Owner = parts[0]
@@ -121,19 +132,10 @@ func ParseGitHubURL(input string) (*RepoInfo, error) {
 			}
 
 			info.TreeRef = strings.Join(treeParts, "/")
-			if strings.Contains(info.TreeRef, "%2F") || strings.Contains(info.TreeRef, "%2f") {
-				decoded, err := url.PathUnescape(info.TreeRef)
-				if err != nil {
-					return nil, fmt.Errorf("invalid GitHub URL format: %s", input)
-				}
-				info.Branch = decoded
-				info.Path = ""
-			} else {
-				info.Branch = treeParts[0]
-				if len(treeParts) > 1 {
-					info.Path = strings.Join(treeParts[1:], "/")
-					info.TreeRefAmbiguous = true
-				}
+			info.Branch = treeParts[0]
+			if len(treeParts) > 1 {
+				info.Path = strings.Join(treeParts[1:], "/")
+				info.TreeRefAmbiguous = !strings.Contains(info.Branch, "/")
 			}
 		} else {
 			// Pattern: https://github.com/owner/repo
